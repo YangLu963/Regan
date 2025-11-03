@@ -1,4 +1,4 @@
-# app_github.py
+# app.py
 import modal
 
 app = modal.App("ragen-github")
@@ -56,23 +56,27 @@ def train_from_github():
         print("✅ GitHub仓库克隆成功")
     except subprocess.CalledProcessError as e:
         print(f"❌ Git克隆失败: {e}")
-        print(f"stderr: {e.stderr}")
         return {"status": "error", "message": "Git克隆失败"}
     
-    # 切换到项目目录
-    os.chdir(work_dir)
-    sys.path.append(str(work_dir))
+    # 切换到项目子目录 ragen_modal
+    project_dir = work_dir / "ragen_modal"
+    os.chdir(project_dir)
+    sys.path.insert(0, str(project_dir))  # 添加到Python路径开头
     
-    # 显示项目结构
+    # 显示项目结构和调试信息
     print("📁 项目文件结构:")
-    for item in work_dir.rglob("*"):
-        if item.is_file():
-            print(f"  📄 {item.relative_to(work_dir)}")
+    for item in project_dir.rglob("*"):
+        if item.is_file() and not any(part.startswith('.') for part in item.parts):
+            print(f"  📄 {item.relative_to(project_dir)}")
+    
+    print(f"🔍 当前工作目录: {os.getcwd()}")
+    print(f"🔍 Python路径: {sys.path}")
     
     try:
         # 导入并运行训练器
         print("\n🎯 导入训练模块...")
         from ragen.train_ragen_apo import RAGENWebShopTrainer
+        
         print("🚀 开始训练...")
         trainer = RAGENWebShopTrainer()
         trainer.train()
