@@ -3,19 +3,20 @@ import modal
 
 app = modal.App("ragen-github")
 
-# 镜像配置 - 包含git和所有依赖
-# 在 app.py 中修改镜像配置
+# 镜像配置 - 增加Flask依赖用于WebShop
 image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
-        "torch==2.0.1",
-        "transformers>=4.37.0",  # 升级到支持Qwen2的版本
-        "accelerate==0.24.1",
-        "numpy==1.24.3",
-        "requests==2.31.0", 
-        "PyYAML==6.0.1",
-        "urllib3==1.26.18",
-        "tqdm==4.66.1"
+        "torch>=2.1.0",
+        "transformers>=4.37.0", 
+        "accelerate>=0.24.1",
+        "numpy>=1.24.3",
+        "requests>=2.31.0",
+        "PyYAML>=6.0.1", 
+        "urllib3>=1.26.18",
+        "tqdm>=4.66.1",
+        "flask>=2.3.0",  # WebShop需要
+        "flask-cors>=4.0.0"  # WebShop需要
     )
     .run_commands(
         "apt-get update && apt-get install -y git",
@@ -39,6 +40,8 @@ def train_from_github():
     import sys
     from pathlib import Path
     import subprocess
+    import time
+    import requests
     
     print("🚀 从GitHub克隆RAGEN项目...")
     
@@ -62,16 +65,70 @@ def train_from_github():
     # 切换到项目子目录 ragen_modal
     project_dir = work_dir / "ragen_modal"
     os.chdir(project_dir)
-    sys.path.insert(0, str(project_dir))  # 添加到Python路径开头
+    sys.path.insert(0, str(project_dir))
     
-    # 显示项目结构和调试信息
+    # ================== 新增：启动真实WebShop服务器 ==================
+    print("🛠️ 启动真实WebShop服务器...")
+    webshop_process = None
+    
+    try:
+        # 1. 克隆官方WebShop仓库
+        webshop_dir = Path("/root/WebShop")
+        if not webshop_dir.exists():
+            print("📥 克隆WebShop官方仓库...")
+            subprocess.run([
+                "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
+                str(webshop_dir)
+            ], check=True, timeout=120)
+            print("✅ WebShop仓库克隆完成")
+        
+        # 2. 安装WebShop特定依赖
+        print("📦 安装WebShop依赖...")
+        subprocess.run([
+            "pip", "install", "-r", str(webshop_dir / "requirements.txt")
+        ], check=True, timeout=180)
+        print("✅ WebShop依赖安装完成")
+        
+        # 3. 启动WebShop服务器
+        print("🚀 启动WebShop服务进程...")
+        webshop_process = subprocess.Popen([
+            "python", "run.py", "--port", "3000"
+        ], cwd=webshop_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # 4. 等待服务器启动
+        print("⏳ 等待WebShop服务器启动...")
+        server_started = False
+        for i in range(30):  # 最多等待30秒
+            try:
+                response = requests.get("http://localhost:3000/", timeout=5)
+                if response.status_code == 200:
+                    server_started = True
+                    print("✅ WebShop服务器启动成功！")
+                    break
+                else:
+                    print(f"⏳ 服务器返回状态码 {response.status_code}，继续等待... ({i+1}/30)")
+            except Exception as e:
+                print(f"⏳ 等待服务器... ({i+1}/30) - {str(e)[:100]}")
+            time.sleep(1)
+        
+        if not server_started:
+            print("❌ WebShop服务器启动失败，将使用模拟模式")
+            # 设置环境变量通知使用模拟模式
+            os.environ["USE_SIMULATED_WEBSHOP"] = "true"
+        else:
+            print("🎯 真实WebShop环境准备就绪！")
+            os.environ["USE_SIMULATED_WEBSHOP"] = "false"
+            
+    except Exception as e:
+        print(f"⚠️ WebShop服务器启动过程中出错: {e}")
+        print("🔄 将使用模拟模式继续训练")
+        os.environ["USE_SIMULATED_WEBSHOP"] = "true"
+    
+    # ================== 显示项目结构 ==================
     print("📁 项目文件结构:")
     for item in project_dir.rglob("*"):
         if item.is_file() and not any(part.startswith('.') for part in item.parts):
             print(f"  📄 {item.relative_to(project_dir)}")
-    
-    print(f"🔍 当前工作目录: {os.getcwd()}")
-    print(f"🔍 Python路径: {sys.path}")
     
     try:
         # 导入并运行训练器
@@ -85,16 +142,28 @@ def train_from_github():
         # 保存结果到卷
         save_results_to_volume()
         
+        # 训练完成后停止WebShop服务器
+        if webshop_process:
+            webshop_process.terminate()
+            webshop_process.wait()
+            print("🛑 WebShop服务器已停止")
+        
         return {
             "status": "completed", 
             "message": "训练成功完成",
-            "github_repo": repo_url
+            "github_repo": repo_url,
+            "webshop_mode": "real" if os.environ.get("USE_SIMULATED_WEBSHOP") == "false" else "simulated"
         }
         
     except Exception as e:
         print(f"❌ 训练过程中出错: {e}")
         import traceback
         traceback.print_exc()
+        
+        # 确保服务器被停止
+        if webshop_process:
+            webshop_process.terminate()
+        
         return {"status": "error", "message": str(e)}
 
 def save_results_to_volume():
