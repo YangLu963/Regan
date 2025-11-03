@@ -1,0 +1,30 @@
+# WebShop环境配置
+environment:
+  name: "webshop"
+  server_url: "http://localhost:3000"
+  max_steps: 15
+
+# Qwen Base模型配置
+model:
+  base_model: "Qwen/Qwen2.5-1.5B"
+  device: "cuda"
+  max_length: 512
+
+# A*PO训练配置
+training:
+  batch_size: 8
+  num_epochs: 200
+  learning_rate: 0.000001 
+  beta: 0.02
+  gamma: 0.99
+  grad_clip: 1.0
+
+# 经验缓冲区
+buffer:
+  capacity: 64
+
+# V*缓存配置
+vstar_cache:
+  enabled: true
+  cache_file: "vstar_cache.pkl"
+  num_vstar_samples: 5
