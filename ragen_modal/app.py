@@ -59,15 +59,16 @@ def train_from_github():
         print(f"stderr: {e.stderr}")
         return {"status": "error", "message": "Git克隆失败"}
     
-    # 切换到项目目录
-    os.chdir(work_dir)
-    sys.path.append(str(work_dir))
+    # 切换到项目子目录 ragen_modal
+    project_dir = work_dir / "ragen_modal"  # 添加这行
+    os.chdir(project_dir)  # 修改这行
+    sys.path.append(str(project_dir))  # 修改这行
     
     # 显示项目结构
     print("📁 项目文件结构:")
-    for item in work_dir.rglob("*"):
-        if item.is_file():
-            print(f"  📄 {item.relative_to(work_dir)}")
+    for item in project_dir.rglob("*"):  # 修改这行
+        if item.is_file() and not any(part.startswith('.') for part in item.parts):
+            print(f"  📄 {item.relative_to(project_dir)}")  # 修改这行
     
     try:
         # 导入并运行训练器
