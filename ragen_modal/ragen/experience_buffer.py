@@ -1,52 +1,42 @@
-import numpy as np
-import torch
-from collections import deque
 import random
+import numpy as np
 
 class ExperienceBuffer:
-    def __init__(self, capacity):
+    def __init__(self, capacity=1000):
         self.capacity = capacity
-        self.buffer = deque(maxlen=capacity)
-    
-    def push(self, observation, instruction, think_content, action_content, reward, done, log_prob):
-        """存储经验"""
+        self.buffer = []
+        self.position = 0
+        
+    def push(self, obs, instruction, think, action, reward, done, log_prob):
         experience = {
-            'observation': observation,
+            'observation': obs,
             'instruction': instruction,
-            'think_content': think_content,
-            'action_content': action_content,
+            'think': think,
+            'action': action, 
             'reward': reward,
             'done': done,
             'log_prob': log_prob
         }
-        self.buffer.append(experience)
-    
+        
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+        else:
+            self.buffer[self.position] = experience
+        self.position = (self.position + 1) % self.capacity
+        
     def sample(self, batch_size):
-        """采样一批经验"""
         if len(self.buffer) < batch_size:
             return None
             
         batch = random.sample(self.buffer, batch_size)
-        
-        # 解包批次数据
-        observations = [(exp['observation'], exp['instruction']) for exp in batch]
-        think_contents = [exp['think_content'] for exp in batch]
-        action_contents = [exp['action_content'] for exp in batch]
-        rewards = [exp['reward'] for exp in batch]
-        dones = [exp['done'] for exp in batch]
-        log_probs = [exp['log_prob'] for exp in batch]
-        
         return {
-            'observations': observations,
-            'think_contents': think_contents,
-            'action_contents': action_contents,
-            'rewards': torch.FloatTensor(rewards),
-            'dones': torch.BoolTensor(dones),
-            'log_probs': torch.FloatTensor(log_probs)
+            'observations': [(b['observation'], b['instruction']) for b in batch],
+            'thinks': [b['think'] for b in batch],
+            'actions': [b['action'] for b in batch],
+            'rewards': [b['reward'] for b in batch],
+            'dones': [b['done'] for b in batch],
+            'log_probs': [b['log_prob'] for b in batch]
         }
-    
-    def clear(self):
-        self.buffer.clear()
-    
+        
     def __len__(self):
         return len(self.buffer)
