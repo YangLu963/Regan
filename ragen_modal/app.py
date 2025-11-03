@@ -4,14 +4,15 @@ import modal
 app = modal.App("ragen-github")
 
 # 镜像配置 - 包含git和所有依赖
+# 在 app.py 中修改镜像配置
 image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
         "torch==2.0.1",
-        "transformers==4.35.0", 
+        "transformers>=4.37.0",  # 升级到支持Qwen2的版本
         "accelerate==0.24.1",
         "numpy==1.24.3",
-        "requests==2.31.0",
+        "requests==2.31.0", 
         "PyYAML==6.0.1",
         "urllib3==1.26.18",
         "tqdm==4.66.1"
