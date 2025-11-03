@@ -16,11 +16,15 @@ image = (
         "urllib3>=1.26.18",
         "tqdm>=4.66.1",
         "flask>=2.3.0",  # WebShop需要
-        "flask-cors>=4.0.0"  # WebShop需要
+        "flask-cors>=4.0.0",  # WebShop需要 - 这里缺少逗号
+        "beautifulsoup4>=4.12.0",
+        "nmslib",  # 预安装这个编译耗时的包
+        "scikit-learn",  # WebShop 可能需要
+        "pandas"  # WebShop 可能需要
     )
     .run_commands(
-        "apt-get update && apt-get install -y git",
-        "git config --global http.postBuffer 1048576000"
+        "apt-get update && apt-get install -y git build-essential cmake",  # 添加编译工具
+        "git config --global http.postBuffer 1048576000"  # 删除重复的apt-get
     )
 )
 
@@ -67,7 +71,7 @@ def train_from_github():
     os.chdir(project_dir)
     sys.path.insert(0, str(project_dir))
     
-    # ================== 新增：启动真实WebShop服务器 ==================
+    # ================== 优化：启动真实WebShop服务器 ==================
     print("🛠️ 启动真实WebShop服务器...")
     webshop_process = None
     
@@ -82,18 +86,15 @@ def train_from_github():
             ], check=True, timeout=120)
             print("✅ WebShop仓库克隆完成")
         
-        # 2. 安装WebShop特定依赖
-        print("📦 安装WebShop依赖...")
-        subprocess.run([
-            "pip", "install", "-r", str(webshop_dir / "requirements.txt")
-        ], check=True, timeout=180)
-        print("✅ WebShop依赖安装完成")
+        # 2. ❌ 删除这行：不再安装requirements.txt（依赖已在镜像中预装）
+        # subprocess.run(["pip", "install", "-r", str(webshop_dir / "requirements.txt")], check=True, timeout=180)
+        print("✅ WebShop依赖已在镜像中预安装")
         
         # 3. 启动WebShop服务器
         print("🚀 启动WebShop服务进程...")
         webshop_process = subprocess.Popen([
             "python", "run.py", "--port", "3000"
-        ], cwd=webshop_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ], cwd=str(webshop_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE)  # 修复：添加str()
         
         # 4. 等待服务器启动
         print("⏳ 等待WebShop服务器启动...")
@@ -106,14 +107,15 @@ def train_from_github():
                     print("✅ WebShop服务器启动成功！")
                     break
                 else:
-                    print(f"⏳ 服务器返回状态码 {response.status_code}，继续等待... ({i+1}/30)")
+                    if i % 5 == 0:  # 每5次打印一次，减少日志
+                        print(f"⏳ 服务器返回状态码 {response.status_code}，继续等待... ({i+1}/30)")
             except Exception as e:
-                print(f"⏳ 等待服务器... ({i+1}/30) - {str(e)[:100]}")
+                if i % 5 == 0:  # 每5次打印一次，减少日志
+                    print(f"⏳ 等待服务器... ({i+1}/30) - {str(e)[:100]}")
             time.sleep(1)
         
         if not server_started:
             print("❌ WebShop服务器启动失败，将使用模拟模式")
-            # 设置环境变量通知使用模拟模式
             os.environ["USE_SIMULATED_WEBSHOP"] = "true"
         else:
             print("🎯 真实WebShop环境准备就绪！")
