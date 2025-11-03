@@ -72,8 +72,7 @@ def train_from_github():
     try:
         # 导入并运行训练器
         print("\n🎯 导入训练模块...")
-        from ragen.train_ragen_apo import RAGENWebShopTrainerr
-        
+        from ragen.train_ragen_apo import RAGENWebShopTrainer
         print("🚀 开始训练...")
         trainer = RAGENWebShopTrainer()
         trainer.train()
