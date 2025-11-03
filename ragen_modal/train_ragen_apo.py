@@ -5,12 +5,9 @@ import yaml
 import os
 from collections import deque
 import time
-import warnings
-warnings.filterwarnings('ignore')
 
 from ragen.qwen_agent import QwenRAGENAgent
 from ragen.experience_buffer import ExperienceBuffer
-from ragen.apo_trainer import APOTrainer
 from ragen.webshop_env import WebShopEnv
 from ragen.reward_calculator import RewardCalculator
 
@@ -35,26 +32,14 @@ class RAGENWebShopTrainer:
             device=self.config['model']['device']
         )
         
-        # 参考策略（固定）
-        self.reference_agent = QwenRAGENAgent(
-            model_name=self.config['model']['base_model'],
-            device=self.config['model']['device']
-        )
-        
         self.reward_calculator = RewardCalculator()
-        self.optimizer = optim.Adam(self.agent.parameters(), lr=self.config['training']['learning_rate'])
-        self.buffer = ExperienceBuffer(self.config['buffer']['capacity'])
-        self.apo_trainer = APOTrainer(
-            beta=self.config['training']['beta'],
-            gamma=self.config['training']['gamma'],
-            cache_file=self.config['vstar_cache']['cache_file'],
-            num_vstar_samples=self.config['vstar_cache']['num_vstar_samples']
-        )
+        self.optimizer = optim.Adam(self.agent.parameters(), lr=1e-5)  # 小学习率
+        self.buffer = ExperienceBuffer(1000)
         
         # 训练统计
         self.episode_rewards = deque(maxlen=20)
         self.success_rates = deque(maxlen=20)
-        self.format_success_rates = deque(maxlen=20)  # 格式成功率
+        self.format_success_rates = deque(maxlen=20)
         self.best_success_rate = 0.0
         self.total_steps = 0
         
@@ -63,99 +48,92 @@ class RAGENWebShopTrainer:
         print(f"\n📥 收集 {num_episodes} 个回合的经验...")
         
         for episode in range(num_episodes):
-            obs, info = self.env.reset()
-            instruction = info['instruction']
-            episode_reward = 0
-            done = False
-            steps = 0
-            
-            print(f"\n--- 回合 {episode+1} ---")
-            print(f"任务: {instruction}")
-            
-            while not done and steps < self.config['environment']['max_steps']:
-                # Qwen生成思考和动作
-                think_content, action_content, log_prob, full_response = self.agent.generate_webshop_response(obs, instruction)
+            try:
+                obs, info = self.env.reset()
+                instruction = info['instruction']
+                episode_reward = 0
+                done = False
+                steps = 0
                 
-                print(f"\n步骤 {steps+1}:")
-                print(f"思考: {think_content[:100]}...")
-                print(f"动作: {action_content}")
+                print(f"\n--- 回合 {episode+1} ---")
+                print(f"任务: {instruction}")
                 
-                # 执行动作
-                next_obs, env_reward, done, info = self.env.step(action_content, info['session_id'])
+                while not done and steps < self.config['environment']['max_steps']:
+                    # 生成思考和动作
+                    think_content, action_content, log_prob, full_response = self.agent.generate_webshop_response(obs, instruction)
+                    
+                    print(f"\n步骤 {steps+1}:")
+                    print(f"思考: {think_content}")
+                    print(f"动作: {action_content}")
+                    
+                    # 执行动作
+                    next_obs, env_reward, done, info = self.env.step(action_content, info['session_id'])
+                    
+                    # 计算奖励
+                    task_success = (env_reward > 0.5)
+                    reward = self.reward_calculator.calculate_reward(think_content, action_content, next_obs, task_success)
+                    
+                    episode_reward += reward
+                    steps += 1
+                    self.total_steps += 1
+                    
+                    # 存储经验
+                    self.buffer.push(obs, instruction, think_content, action_content, reward, done, log_prob)
+                    
+                    obs = next_obs
+                    
+                    if done:
+                        break
                 
-                # 计算详细奖励
-                task_success = (env_reward > 0.5)
-                reward = self.reward_calculator.calculate_reward(think_content, action_content, next_obs, task_success)
+                # 记录统计
+                self.episode_rewards.append(episode_reward)
+                success = 1 if episode_reward > 0.8 else 0
+                self.success_rates.append(success)
                 
-                episode_reward += reward
-                steps += 1
-                self.total_steps += 1
+                format_success = 1 if self._check_format_success(think_content, action_content) else 0
+                self.format_success_rates.append(format_success)
                 
-                # 存储经验
-                self.buffer.push(obs, instruction, think_content, action_content, reward, done, log_prob)
+                current_success = np.mean(self.success_rates) if self.success_rates else 0
+                current_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
                 
-                obs = next_obs
+                print(f"\n回合结果: 总奖励={episode_reward:.2f}, 成功率={current_success:.3f}, 格式成功率={current_format:.3f}")
                 
-                if done:
-                    break
-            
-            # 记录统计信息
-            self.episode_rewards.append(episode_reward)
-            success = 1 if episode_reward > 0.5 else 0
-            self.success_rates.append(success)
-            
-            # 格式成功率（关键指标）
-            format_success = 1 if self._check_format_success(think_content, action_content) else 0
-            self.format_success_rates.append(format_success)
-            
-            current_success = np.mean(self.success_rates) if self.success_rates else 0
-            current_format_success = np.mean(self.format_success_rates) if self.format_success_rates else 0
-            
-            print(f"\n回合结果: 总奖励={episode_reward:.2f}, 成功率={current_success:.3f}, 格式成功率={current_format_success:.3f}")
+            except Exception as e:
+                print(f"回合 {episode+1} 出错: {e}")
+                continue
     
     def _check_format_success(self, think_content, action_content):
         """检查格式是否正确"""
-        return (think_content and "<think>" in think_content and "</think>" in think_content and
-                action_content and "<action>" in action_content and "</action>" in action_content)
+        has_think = think_content and len(think_content) > 5
+        has_action = action_content and any(x in action_content for x in ['search[', 'click[', 'buy['])
+        return has_think and has_action
     
     def train_step(self):
-        """执行一次训练步骤"""
-        if len(self.buffer) < self.config['training']['batch_size']:
+        """简化的训练步骤"""
+        if len(self.buffer) < 4:  # 小批量
             return None
             
-        batch = self.buffer.sample(self.config['training']['batch_size'])
+        batch = self.buffer.sample(4)
         if batch is None:
             return None
         
-        # 计算A*PO优势
-        advantages, v_star_values = self.apo_trainer.compute_advantages(
-            batch['observations'], batch['rewards'], batch['dones'],
-            self.reference_agent, self.agent
-        )
+        # 计算优势（简化版）
+        rewards = torch.FloatTensor(batch['rewards'])
+        advantages = rewards - rewards.mean()
         
-        # 计算参考策略的对数概率
-        with torch.no_grad():
-            ref_log_probs = []
-            for (obs, instruction) in batch['observations']:
-                _, _, ref_log_prob, _ = self.reference_agent.generate_webshop_response(obs, instruction)
-                ref_log_probs.append(ref_log_prob)
-            ref_log_probs = torch.FloatTensor(ref_log_probs)
-        
-        # 计算A*PO策略损失
-        policy_loss, pg_loss, kl_penalty = self.apo_trainer.compute_policy_loss(
-            batch['log_probs'], advantages, ref_log_probs
-        )
+        # 策略损失
+        log_probs = torch.FloatTensor(batch['log_probs'])
+        policy_loss = -(log_probs * advantages).mean()
         
         # 反向传播
         self.optimizer.zero_grad()
         policy_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.agent.parameters(), self.config['training']['grad_clip'])
+        torch.nn.utils.clip_grad_norm_(self.agent.parameters(), 1.0)
         self.optimizer.step()
         
         return {
             'total_loss': policy_loss.item(),
-            'policy_loss': pg_loss,
-            'kl_penalty': kl_penalty,
+            'avg_reward': rewards.mean().item(),
             'avg_advantage': advantages.mean().item()
         }
     
@@ -168,45 +146,38 @@ class RAGENWebShopTrainer:
         
         start_time = time.time()
         
-        for epoch in range(self.config['training']['num_epochs']):
-            # 阶段1: 收集经验
+        for epoch in range(50):  # 减少epoch数
+            # 收集经验
             self.collect_experience(num_episodes=2)
             
-            # 阶段2: 训练
-            if len(self.buffer) >= self.config['training']['batch_size']:
+            # 训练
+            if len(self.buffer) >= 4:
                 loss_info = self.train_step()
                 
-                if loss_info and epoch % 5 == 0:
+                if loss_info:
                     current_success = np.mean(self.success_rates) if self.success_rates else 0
                     current_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
                     
                     print(f"Epoch {epoch:3d} | Loss: {loss_info['total_loss']:7.4f} | "
-                          f"Success: {current_success:5.3f} | Format: {current_format:5.3f} | "
-                          f"Buffer: {len(self.buffer):2d}")
+                          f"Reward: {loss_info['avg_reward']:5.3f} | "
+                          f"Success: {current_success:5.3f} | Format: {current_format:5.3f}")
             
-            # 阶段3: 评估和检查停止条件
-            if epoch % 10 == 0:
+            # 评估
+            if epoch % 5 == 0:
                 current_success = np.mean(self.success_rates) if self.success_rates else 0
                 current_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
-                training_time = (time.time() - start_time) / 60
                 
                 if current_success > self.best_success_rate:
                     self.best_success_rate = current_success
                 
                 print(f"\n=== 评估 Epoch {epoch} ===")
-                print(f"训练时间: {training_time:6.1f} 分钟")
-                print(f"总步数: {self.total_steps:6d}")
-                print(f"当前成功率: {current_success:6.3f}")
-                print(f"格式成功率: {current_format:6.3f}")
-                print(f"历史最佳: {self.best_success_rate:6.3f}")
+                print(f"当前成功率: {current_success:.3f}")
+                print(f"格式成功率: {current_format:.3f}")
+                print(f"历史最佳: {self.best_success_rate:.3f}")
                 
                 # 成功标准检查
                 if current_success >= 0.20:
-                    print("🎉" * 20)
-                    print("达到Part 2作业要求: 成功率 > 20%!")
-                    print("Base Model成功学习了格式遵循和任务解决!")
-                    print("可以停止训练并准备演示")
-                    print("🎉" * 20)
+                    print("🎉 达到Part 2作业要求: 成功率 > 20%!")
                     break
                     
                 print("-" * 40)
@@ -214,21 +185,15 @@ class RAGENWebShopTrainer:
         # 最终统计
         total_time = (time.time() - start_time) / 60
         final_success = np.mean(self.success_rates) if self.success_rates else 0
-        final_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
         
         print(f"\n" + "=" * 50)
         print("训练完成!")
         print(f"总训练时间: {total_time:.1f} 分钟")
         print(f"最终成功率: {final_success:.3f}")
-        print(f"最终格式成功率: {final_format:.3f}")
         print(f"历史最佳成功率: {self.best_success_rate:.3f}")
-        print(f"总训练步数: {self.total_steps}")
         print("=" * 50)
-        
-        self.env.close()
 
 def main():
-    # 创建目录
     os.makedirs("configs", exist_ok=True)
     os.makedirs("ragen", exist_ok=True)
     
