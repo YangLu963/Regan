@@ -1,8 +1,0 @@
-app:
-  name: ragen-webshop
-  detach: true
-
-# 挂载当前目录到Modal环境
-mounts:
-  - local_directory: .
-    remote_directory: /root/ragen
