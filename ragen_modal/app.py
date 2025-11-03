@@ -1,12 +1,9 @@
-# app.py
+# app_github.py
 import modal
-import os
-import sys
-from pathlib import Path
 
-app = modal.App("ragen-webshop-trainer")
+app = modal.App("ragen-github")
 
-# 基础镜像
+# 镜像配置 - 包含git和所有依赖
 image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
@@ -19,41 +16,58 @@ image = (
         "urllib3==1.26.18",
         "tqdm==4.66.1"
     )
+    .run_commands(
+        "apt-get update && apt-get install -y git",
+        "git config --global http.postBuffer 1048576000"
+    )
 )
 
-# 共享卷用于保存模型
+# 共享卷用于保存结果
 volume = modal.Volume.from_name("ragen-models", create_if_missing=True)
 
 @app.function(
     image=image,
     gpu="A10G",
-    timeout=86400,
+    timeout=86400,  # 24小时
     volumes={"/root/models": volume},
     secrets=[modal.Secret.from_name("my-huggingface-secret")]
 )
-def train_ragen():
-    """在Modal上训练RAGEN - 直接使用你的现有代码"""
-    import torch
-    import yaml
+def train_from_github():
+    """从GitHub克隆项目并训练"""
+    import os
+    import sys
+    from pathlib import Path
+    import subprocess
     
-    print("🚀 开始在Modal上训练RAGEN...")
-    print("=" * 50)
-    print(f"PyTorch版本: {torch.__version__}")
-    print(f"CUDA可用: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name()}")
-        print(f"GPU内存: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
-    print("=" * 50)
+    print("🚀 从GitHub克隆RAGEN项目...")
     
-    # 设置工作目录 - 使用git克隆或手动上传文件
+    # 克隆你的GitHub仓库
+    repo_url = "https://github.com/YangLu963/Regan.git"
     work_dir = Path("/root/ragen_project")
-    work_dir.mkdir(exist_ok=True)
+    
+    try:
+        # 克隆仓库
+        result = subprocess.run(
+            ["git", "clone", repo_url, str(work_dir)],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        print("✅ GitHub仓库克隆成功")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Git克隆失败: {e}")
+        print(f"stderr: {e.stderr}")
+        return {"status": "error", "message": "Git克隆失败"}
+    
+    # 切换到项目目录
     os.chdir(work_dir)
-    
-    # 由于Mount有问题，我们需要手动复制文件
-    copy_project_files()
-    
     sys.path.append(str(work_dir))
+    
+    # 显示项目结构
+    print("📁 项目文件结构:")
+    for item in work_dir.rglob("*"):
+        if item.is_file():
+            print(f"  📄 {item.relative_to(work_dir)}")
     
     try:
         # 导入并运行训练器
@@ -64,13 +78,13 @@ def train_ragen():
         trainer = RAGENWebShopTrainer()
         trainer.train()
         
-        # 保存结果
+        # 保存结果到卷
         save_results_to_volume()
         
         return {
             "status": "completed", 
             "message": "训练成功完成",
-            "gpu_used": torch.cuda.get_device_name() if torch.cuda.is_available() else "None"
+            "github_repo": repo_url
         }
         
     except Exception as e:
@@ -78,23 +92,6 @@ def train_ragen():
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
-
-def copy_project_files():
-    """手动复制项目文件（因为Mount有问题）"""
-    import shutil
-    from pathlib import Path
-    
-    print("📁 设置项目文件...")
-    
-    # 创建必要的目录结构
-    directories = ["ragen", "configs", "logs"]
-    for dir_name in directories:
-        Path(dir_name).mkdir(exist_ok=True)
-    
-    # 这里我们假设文件已经通过其他方式上传
-    # 在实际部署时，你可能需要手动上传文件或使用git
-    
-    print("✅ 项目目录结构创建完成")
 
 def save_results_to_volume():
     """保存训练结果到共享卷"""
@@ -104,7 +101,7 @@ def save_results_to_volume():
     print("\n💾 保存训练结果...")
     
     saved_files = []
-    patterns = ["*.pth", "*.pt", "*.bin", "*.yaml", "*.yml", "*.json", "*.log"]
+    patterns = ["*.pth", "*.pt", "*.bin", "*.yaml", "*.json", "*.log", "vstar_cache.pkl"]
     
     for pattern in patterns:
         for file_path in Path(".").glob(pattern):
@@ -114,14 +111,14 @@ def save_results_to_volume():
                 saved_files.append(file_path.name)
                 print(f"  ✅ 保存: {file_path.name}")
     
-    print(f"📦 总共保存了 {len(saved_files)} 个文件到共享卷")
+    print(f"📦 总共保存了 {len(saved_files)} 个文件")
 
 @app.function(
     image=image,
     volumes={"/root/models": volume}
 )
 def download_results():
-    """下载训练结果到本地"""
+    """下载训练结果"""
     from pathlib import Path
     import shutil
     
@@ -140,43 +137,8 @@ def download_results():
             downloaded_files.append(item.name)
             print(f"  ✅ 下载: {item.name}")
     
-    return {
-        "status": "success", 
-        "downloaded_files": downloaded_files,
-        "count": len(downloaded_files)
-    }
-
-@app.function(image=image)
-def check_environment():
-    """检查Modal环境"""
-    import torch
-    import importlib
-    
-    print("🔍 检查Modal环境...")
-    
-    # 检查GPU
-    gpu_info = {
-        "cuda_available": torch.cuda.is_available(),
-        "device_name": torch.cuda.get_device_name() if torch.cuda.is_available() else "None",
-    }
-    
-    # 检查关键包
-    packages = ["torch", "transformers", "numpy", "yaml", "requests"]
-    package_versions = {}
-    for package in packages:
-        try:
-            mod = importlib.import_module(package)
-            package_versions[package] = getattr(mod, "__version__", "Unknown")
-        except ImportError:
-            package_versions[package] = "Not installed"
-    
-    return {
-        "gpu": gpu_info,
-        "packages": package_versions
-    }
+    return {"status": "success", "files": downloaded_files}
 
 if __name__ == "__main__":
-    # 直接运行训练
     with app.run():
-        result = train_ragen.remote()
-        print(f"训练结果: {result}")
+        train_from_github.remote()
