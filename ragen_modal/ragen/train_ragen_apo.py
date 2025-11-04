@@ -8,10 +8,19 @@ import time
 import warnings
 warnings.filterwarnings('ignore')
 
-from .qwen_agent import QwenRAGENAgent
-from .experience_buffer import ExperienceBuffer  
-from .webshop_env import WebShopEnv
-from .reward_calculator import RewardCalculator
+# 修复导入：使用绝对导入避免循环导入问题
+try:
+    # 当作为模块导入时
+    from .qwen_agent import QwenRAGENAgent
+    from .experience_buffer import ExperienceBuffer  
+    from .webshop_env import WebShopEnv
+    from .reward_calculator import RewardCalculator
+except ImportError:
+    # 当直接运行时
+    from qwen_agent import QwenRAGENAgent
+    from experience_buffer import ExperienceBuffer  
+    from webshop_env import WebShopEnv
+    from reward_calculator import RewardCalculator
 
 # 简化APO训练器（避免复杂依赖）
 class SimpleAPOTrainer:
