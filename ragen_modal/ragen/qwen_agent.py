@@ -18,10 +18,18 @@ class QwenRAGENAgent(nn.Module):
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         
+        # 修复：确保所有参数可训练
+        for param in self.llm.parameters():
+            param.requires_grad = True
+        
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
             
         print("Qwen智能体初始化完成")
+    
+    def parameters(self):
+        """重写parameters方法，确保返回可训练参数"""
+        return self.llm.parameters()
     
     def generate_webshop_response(self, observation, instruction):
         """生成WebShop任务的思考和动作 - 改进版本"""
