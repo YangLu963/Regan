@@ -29,13 +29,13 @@ webshop_image = base_image.pip_install(
     "beautifulsoup4>=4.12.0",
     "scikit-learn",
     "pandas",
-    # nmslib 单独处理，避免编译超时
+    "nmslib"  # 直接在镜像中预安装，避免训练时安装超时
 )
 
 volume = modal.Volume.from_name("ragen-models", create_if_missing=True)
 
 @app.function(
-    image=webshop_image,  # 使用预构建的WebShop镜像
+    image=webshop_image,
     gpu="A10G",
     timeout=86400,
     volumes={"/root/models": volume},
@@ -49,6 +49,7 @@ def train_from_github():
     import subprocess
     import time
     import requests
+    import shutil
     
     print("🚀 从GitHub克隆RAGEN项目...")
     
@@ -57,6 +58,10 @@ def train_from_github():
     work_dir = Path("/root/ragen_project")
     
     try:
+        # 清理旧目录
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+        
         result = subprocess.run(
             ["git", "clone", repo_url, str(work_dir)],
             capture_output=True, text=True, check=True
@@ -75,68 +80,100 @@ def train_from_github():
     webshop_process = None
     
     try:
-        # 1. 克隆官方WebShop仓库
+        # 1. 克隆官方WebShop仓库（确保成功）
         webshop_dir = Path("/root/WebShop")
+        
+        # 清理旧目录
+        if webshop_dir.exists():
+            shutil.rmtree(webshop_dir)
+            print("🗑️ 清理旧WebShop目录")
+        
+        print("📥 克隆WebShop官方仓库...")
+        result = subprocess.run([
+            "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
+            str(webshop_dir)
+        ], capture_output=True, text=True, check=True, timeout=180)
+        
+        print("✅ WebShop仓库克隆完成")
+        
+        # 验证克隆是否成功
         if not webshop_dir.exists():
-            print("📥 克隆WebShop官方仓库...")
-            subprocess.run([
-                "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
-                str(webshop_dir)
-            ], check=True, timeout=120)
-            print("✅ WebShop仓库克隆完成")
+            raise Exception("WebShop目录创建失败")
         
-        # 2. 安装nmslib（单独处理，避免超时）
-        print("📦 安装nmslib...")
-        try:
-            # 尝试快速安装
-            subprocess.run([
-                "pip", "install", "nmslib"
-            ], check=True, timeout=300)  # 5分钟超时
-            print("✅ nmslib安装成功")
-        except subprocess.TimeoutExpired:
-            print("⚠️ nmslib安装超时，尝试跳过...")
-        except Exception as e:
-            print(f"⚠️ nmslib安装失败: {e}")
+        # 检查目录内容
+        print("🔍 检查WebShop目录内容...")
+        result = subprocess.run(["ls", "-la"], cwd=str(webshop_dir), capture_output=True, text=True)
+        print("WebShop目录内容:")
+        print(result.stdout)
         
-        # 3. 检查并安装其他可能缺失的依赖
+        run_py_path = webshop_dir / "run.py"
+        if not run_py_path.exists():
+            raise Exception(f"run.py 文件不存在: {run_py_path}")
+        
+        print(f"✅ 找到 run.py: {run_py_path}")
+
+        # 2. 检查依赖是否完整
         print("🔍 检查WebShop依赖...")
         try:
-            # 测试导入WebShop关键模块
             import flask
             import flask_cors
             import bs4
-            print("✅ WebShop核心依赖已就绪")
+            import nmslib
+            print("✅ WebShop所有依赖已就绪")
         except ImportError as e:
             print(f"⚠️ 依赖缺失: {e}")
             print("📦 安装缺失依赖...")
             subprocess.run([
-                "pip", "install", "flask", "flask-cors", "beautifulsoup4"
-            ], check=True, timeout=60)
-        
-        # 4. 启动WebShop服务器
+                "pip", "install", "flask", "flask-cors", "beautifulsoup4", "nmslib"
+            ], check=True, timeout=120)
+
+        # 3. 启动WebShop服务器
         print("🚀 启动WebShop服务进程...")
+        
+        # 先检查WebShop目录结构
+        print("📁 WebShop项目结构:")
+        result = subprocess.run(["find", ".", "-name", "*.py", "-type", "f"], 
+                              cwd=str(webshop_dir), capture_output=True, text=True)
+        print(result.stdout[:1000])  # 只显示前1000字符
+        
         webshop_process = subprocess.Popen([
             "python", "run.py", "--port", "3000"
         ], cwd=str(webshop_dir), 
            stdout=subprocess.PIPE, 
            stderr=subprocess.PIPE,
            text=True)
-        
-        # 5. 等待服务器启动（更详细的检查）
+
+        # 4. 等待服务器启动
         print("⏳ 等待WebShop服务器启动...")
         server_started = False
         
-        for i in range(45):  # 增加到45秒
+        for i in range(60):  # 增加到60秒
             try:
                 # 检查进程是否存活
                 if webshop_process.poll() is not None:
-                    # 进程已结束，读取错误输出
                     stdout, stderr = webshop_process.communicate()
                     print(f"❌ WebShop进程异常退出:")
-                    if stdout:
-                        print(f"STDOUT: {stdout[-500:]}")  # 最后500字符
-                    if stderr:
-                        print(f"STDERR: {stderr[-500:]}")
+                    print(f"STDOUT: {stdout}")
+                    print(f"STDERR: {stderr}")
+                    
+                    # 尝试诊断问题
+                    if "No module named" in stderr:
+                        print("🔧 检测到模块缺失，尝试安装依赖...")
+                        # 安装WebShop特定依赖
+                        requirements_file = webshop_dir / "requirements.txt"
+                        if requirements_file.exists():
+                            subprocess.run([
+                                "pip", "install", "-r", str(requirements_file)
+                            ], check=True, timeout=120)
+                            print("✅ 依赖安装完成，重新启动...")
+                            # 重新启动
+                            webshop_process = subprocess.Popen([
+                                "python", "run.py", "--port", "3000"
+                            ], cwd=str(webshop_dir), 
+                               stdout=subprocess.PIPE, 
+                               stderr=subprocess.PIPE,
+                               text=True)
+                            continue
                     break
                 
                 # 检查HTTP连接
@@ -146,28 +183,19 @@ def train_from_github():
                     print("✅ WebShop服务器启动成功！")
                     break
                 else:
-                    if i % 10 == 0:  # 每10次打印一次
-                        print(f"⏳ 服务器状态码 {response.status_code}，继续等待... ({i+1}/45)")
+                    if i % 10 == 0:
+                        print(f"⏳ 服务器状态码 {response.status_code}，继续等待... ({i+1}/60)")
             except requests.exceptions.ConnectionError:
                 if i % 10 == 0:
-                    print(f"⏳ 连接拒绝，继续等待... ({i+1}/45)")
+                    print(f"⏳ 连接拒绝，继续等待... ({i+1}/60)")
             except Exception as e:
                 if i % 10 == 0:
-                    print(f"⏳ 等待中... ({i+1}/45) - {str(e)[:100]}")
+                    print(f"⏳ 等待中... ({i+1}/60) - {str(e)[:100]}")
             
             time.sleep(1)
         
         if not server_started:
             print("❌ WebShop服务器启动失败")
-            # 尝试读取进程输出获取更多信息
-            try:
-                stdout, stderr = webshop_process.communicate(timeout=5)
-                if stdout:
-                    print(f"最后输出: {stdout[-1000:]}")
-                if stderr:
-                    print(f"错误信息: {stderr[-1000:]}")
-            except:
-                pass
             return {"status": "error", "message": "WebShop服务器启动失败"}
         else:
             print("🎯 真实WebShop环境准备就绪！")
@@ -265,6 +293,89 @@ def download_results():
             print(f"  ✅ 下载: {item.name}")
     
     return {"status": "success", "files": downloaded_files}
+
+# 添加调试函数
+@app.function(image=webshop_image)
+def debug_webshop():
+    """调试WebShop安装"""
+    import subprocess
+    from pathlib import Path
+    import shutil
+    
+    print("🔧 调试WebShop安装...")
+    
+    webshop_dir = Path("/root/WebShop")
+    
+    # 清理旧目录
+    if webshop_dir.exists():
+        shutil.rmtree(webshop_dir)
+    
+    # 克隆WebShop
+    print("📥 克隆WebShop...")
+    result = subprocess.run([
+        "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
+        str(webshop_dir)
+    ], capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        print(f"❌ Git克隆失败: {result.stderr}")
+        return {"status": "error", "message": "Git克隆失败"}
+    
+    print("✅ 克隆成功")
+    
+    # 检查目录内容
+    print("📁 目录内容:")
+    result = subprocess.run(["ls", "-la"], cwd=str(webshop_dir), capture_output=True, text=True)
+    print(result.stdout)
+    
+    # 检查run.py
+    run_py = webshop_dir / "run.py"
+    print(f"run.py存在: {run_py.exists()}")
+    
+    if run_py.exists():
+        # 尝试安装requirements
+        requirements_file = webshop_dir / "requirements.txt"
+        if requirements_file.exists():
+            print("📦 安装requirements.txt...")
+            result = subprocess.run([
+                "pip", "install", "-r", str(requirements_file)
+            ], capture_output=True, text=True, timeout=180)
+            if result.returncode == 0:
+                print("✅ 依赖安装成功")
+            else:
+                print(f"⚠️ 依赖安装问题: {result.stderr}")
+        
+        # 尝试启动
+        print("🚀 尝试启动WebShop...")
+        process = subprocess.Popen(
+            ["python", "run.py", "--port", "3000"], 
+            cwd=str(webshop_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        import time
+        time.sleep(10)  # 等待10秒
+        
+        # 检查进程状态
+        if process.poll() is None:
+            print("✅ WebShop进程正在运行")
+            # 测试连接
+            try:
+                import requests
+                response = requests.get("http://localhost:3000/", timeout=5)
+                print(f"✅ 服务器响应: {response.status_code}")
+            except Exception as e:
+                print(f"❌ 连接失败: {e}")
+            process.terminate()
+        else:
+            stdout, stderr = process.communicate()
+            print(f"❌ 进程退出:")
+            print(f"STDOUT: {stdout}")
+            print(f"STDERR: {stderr}")
+    
+    return {"status": "debug_complete"}
 
 if __name__ == "__main__":
     with app.run():
