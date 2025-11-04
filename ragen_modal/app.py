@@ -224,30 +224,30 @@ class TrainingEvaluator:
         stats = self.get_summary_stats()
         
         print("\n" + "="*80)
-        print("📊 详细训练报告")
+        print("📊 Detailed Training Report")
         print("="*80)
         
-        print(f"📈 总体统计:")
-        print(f"   • 总训练轮次: {stats['total_episodes']}")
-        print(f"   • 平均奖励: {stats['average_reward']:.3f}")
-        print(f"   • 平均步数: {stats['average_steps']:.1f}")
-        print(f"   • 成功率: {stats['success_rate']:.1f}%")
-        print(f"   • 训练效率: {stats['efficiency']:.3f}")
-        print(f"   • 最高奖励: {stats['max_reward']:.3f}")
-        print(f"   • 最低奖励: {stats['min_reward']:.3f}")
+        print(f"📈 Overall Statistics:")
+        print(f"   • Total Episodes: {stats['total_episodes']}")
+        print(f"   • Average Reward: {stats['average_reward']:.3f}")
+        print(f"   • Average Steps: {stats['average_steps']:.1f}")
+        print(f"   • Success Rate: {stats['success_rate']:.1f}%")
+        print(f"   • Training Efficiency: {stats['efficiency']:.3f}")
+        print(f"   • Max Reward: {stats['max_reward']:.3f}")
+        print(f"   • Min Reward: {stats['min_reward']:.3f}")
         
-        print(f"\n🎯 最近5轮表现:")
+        print(f"\n🎯 Recent 5 Episodes:")
         for i, history in enumerate(self.training_history[-5:]):
-            print(f"   第{history['episode']+1}轮: 奖励={history['reward']:.2f}, "
-                  f"步数={history['steps']}, 准确率={history['accuracy']}, "
-                  f"查询='{history['query'][:30]}...'")
+            print(f"   Episode {history['episode']+1}: Reward={history['reward']:.2f}, "
+                  f"Steps={history['steps']}, Accuracy={history['accuracy']}, "
+                  f"Query='{history['query'][:30]}...'")
         
         # 学习进度分析
         if len(self.episode_rewards) >= 10:
             first_half = self.episode_rewards[:len(self.episode_rewards)//2]
             second_half = self.episode_rewards[len(self.episode_rewards)//2:]
             improvement = (sum(second_half)/len(second_half) - sum(first_half)/len(first_half)) / (sum(first_half)/len(first_half)) * 100
-            print(f"\n📈 学习进度: 后50%相比前50%奖励提升 {improvement:+.1f}%")
+            print(f"\n📈 Learning Progress: Last 50% improved by {improvement:+.1f}% vs first 50%")
 
 class DetailedRAGENTrainer:
     """详细的RAGEN训练器"""
@@ -280,7 +280,7 @@ class DetailedRAGENTrainer:
         target_product = query_data["target"]
         
         print(f"\n🎯 Episode {episode_idx + 1}: '{user_query}'")
-        print(f"   目标产品: {target_product}")
+        print(f"   Target Product: {target_product}")
         
         state = self.env.reset(user_query, target_product)
         steps = 0
@@ -292,12 +292,12 @@ class DetailedRAGENTrainer:
             
             if action["type"] == "filter":
                 state = self.env.apply_filter(action["filter_type"], action["filter_value"])
-                print(f"   → 步骤{steps+1}: 应用过滤器 [{action['filter_type']}={action['filter_value']}]")
-                print(f"     剩余产品: {len(state['filtered_products'])}个")
+                print(f"   → Step {steps+1}: Apply filter [{action['filter_type']}={action['filter_value']}]")
+                print(f"      Remaining products: {len(state['filtered_products'])}")
             elif action["type"] == "select":
                 state = self.env.select_product(action["product_id"])
                 accuracy = "✓" if state.get("correct_selection", False) else "✗"
-                print(f"   → 步骤{steps+1}: 选择产品 [{action['product_id']}] {accuracy}")
+                print(f"   → Step {steps+1}: Select product [{action['product_id']}] {accuracy}")
             
             steps += 1
         
@@ -310,8 +310,8 @@ class DetailedRAGENTrainer:
             user_query, selected_name
         )
         
-        print(f"   ✅ 完成: 奖励={state['reward']:.2f}, 步数={steps}, "
-              f"准确率={accuracy}, 选择='{selected_name}'")
+        print(f"   ✅ Completed: Reward={state['reward']:.2f}, Steps={steps}, "
+              f"Accuracy={accuracy}, Selected='{selected_name}'")
         
         return state["reward"], steps, accuracy
     
@@ -374,9 +374,9 @@ class DetailedRAGENTrainer:
     
     def train(self, num_episodes=20):
         """主训练循环"""
-        print("🚀 开始详细训练...")
-        print(f"📊 计划训练 {num_episodes} 个episodes")
-        print(f"🎮 使用{'模拟' if self.use_simulated else '真实'}环境")
+        print("🚀 Starting detailed training...")
+        print(f"📊 Planning to train {num_episodes} episodes")
+        print(f"🎮 Using {'simulated' if self.use_simulated else 'real'} environment")
         
         start_time = time.time()
         
@@ -386,25 +386,25 @@ class DetailedRAGENTrainer:
             # 每5个episode打印进度
             if (episode + 1) % 5 == 0:
                 recent_stats = self.evaluator.get_summary_stats()
-                print(f"\n📈 进度报告 (Episodes 1-{episode+1}):")
-                print(f"   平均奖励: {recent_stats['average_reward']:.3f}")
-                print(f"   平均步数: {recent_stats['average_steps']:.1f}")
-                print(f"   成功率: {recent_stats['success_rate']:.1f}%")
+                print(f"\n📈 Progress Report (Episodes 1-{episode+1}):")
+                print(f"   Average Reward: {recent_stats['average_reward']:.3f}")
+                print(f"   Average Steps: {recent_stats['average_steps']:.1f}")
+                print(f"   Success Rate: {recent_stats['success_rate']:.1f}%")
         
         # 训练完成
         training_time = time.time() - start_time
         final_stats = self.evaluator.get_summary_stats()
         
-        print(f"\n⏱️ 训练时间: {training_time:.1f}秒")
+        print(f"\n⏱️ Training Time: {training_time:.1f} seconds")
         self.evaluator.print_detailed_report()
         
         # 环境指标
         env_metrics = self.env.get_metrics()
-        print(f"\n🔄 环境统计:")
-        print(f"   • 总步数: {env_metrics['total_steps']}")
-        print(f"   • 成功选择: {env_metrics['successful_selections']}")
-        print(f"   • 失败选择: {env_metrics['failed_selections']}")
-        print(f"   • 过滤器应用: {env_metrics['filter_applications']}")
+        print(f"\n🔄 Environment Statistics:")
+        print(f"   • Total Steps: {env_metrics['total_steps']}")
+        print(f"   • Successful Selections: {env_metrics['successful_selections']}")
+        print(f"   • Failed Selections: {env_metrics['failed_selections']}")
+        print(f"   • Filter Applications: {env_metrics['filter_applications']}")
         
         return final_stats
 
@@ -413,7 +413,7 @@ def save_detailed_results(stats, evaluator):
     import shutil
     from pathlib import Path
     
-    print("\n💾 保存详细训练结果...")
+    print("\n💾 Saving detailed training results...")
     
     # 保存汇总统计
     results = {
@@ -438,9 +438,9 @@ def save_detailed_results(stats, evaluator):
     files_to_save = ["training_summary.json", "training_history.csv"]
     for filename in files_to_save:
         shutil.copy2(filename, volume_path / filename)
-        print(f"  ✅ 保存: {filename}")
+        print(f"  ✅ Saved: {filename}")
     
-    print(f"📦 总共保存了 {len(files_to_save)} 个结果文件")
+    print(f"📦 Total saved {len(files_to_save)} result files")
 
 @app.function(
     image=base_image,
@@ -457,7 +457,7 @@ def train_from_github():
     import subprocess
     import shutil
     
-    print("🚀 开始详细的RAGEN训练流程...")
+    print("🚀 Starting detailed RAGEN training process...")
     
     # 克隆GitHub仓库
     repo_url = "https://github.com/YangLu963/Regan.git"
@@ -471,13 +471,13 @@ def train_from_github():
             ["git", "clone", repo_url, str(work_dir)],
             capture_output=True, text=True, check=True
         )
-        print("✅ GitHub仓库克隆成功")
+        print("✅ GitHub repository cloned successfully")
     except Exception as e:
-        print(f"❌ Git克隆失败: {e}")
-        return {"status": "error", "message": "Git克隆失败"}
+        print(f"❌ Git clone failed: {e}")
+        return {"status": "error", "message": "Git clone failed"}
     
     # 使用模拟环境训练
-    print("🎮 使用模拟WebShop环境进行详细训练...")
+    print("🎮 Using simulated WebShop environment for detailed training...")
     
     try:
         trainer = DetailedRAGENTrainer(use_simulated=True)
@@ -488,14 +488,14 @@ def train_from_github():
         
         return {
             "status": "completed",
-            "message": "详细训练成功完成",
+            "message": "Detailed training completed successfully",
             "environment": "simulated",
             "summary_stats": final_stats,
             "total_training_time": final_stats.get('total_episodes', 0)
         }
         
     except Exception as e:
-        print(f"❌ 训练过程中出错: {e}")
+        print(f"❌ Error during training: {e}")
         import traceback
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
@@ -509,20 +509,20 @@ def download_results():
     from pathlib import Path
     import shutil
     
-    print("📥 下载训练结果...")
+    print("📥 Downloading training results...")
     
     volume_path = Path("/root/models")
     local_path = Path(".")
     
     if not volume_path.exists():
-        return {"status": "error", "message": "共享卷中没有数据"}
+        return {"status": "error", "message": "No data in shared volume"}
     
     downloaded_files = []
     for item in volume_path.iterdir():
         if item.is_file():
             shutil.copy2(item, local_path / item.name)
             downloaded_files.append(item.name)
-            print(f"  ✅ 下载: {item.name}")
+            print(f"  ✅ Downloaded: {item.name}")
     
     return {"status": "success", "files": downloaded_files}
 
