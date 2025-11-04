@@ -1,9 +1,8 @@
-# app.py
 import modal
 
 app = modal.App("ragen-github-webshop")
 
-# 第一阶段：基础镜像（包含所有必要依赖）
+# 第一阶段：基础镜像（只包含必要依赖）
 base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
@@ -13,33 +12,32 @@ base_image = (
         "numpy>=1.24.3",
         "requests>=2.31.0",
         "PyYAML>=6.0.1", 
-        "urllib3>=2.0.0",
+        "urllib3>=2.0.0",  # 保持高版本
         "tqdm>=4.66.1",
         "flask>=2.3.0",
-        "flask-cors>=4.0.0",
-        "beautifulsoup4>=4.12.0",
-        "rich",  # 添加缺失的rich模块
-        "scikit-learn",
-        "pandas",
-        "nmslib"
+        "flask-cors>=4.0.0"
     )
-    .run_commands(
-        "apt-get update && apt-get install -y git build-essential cmake",
-        "git config --global http.postBuffer 1048576000"
-    )
+)
+
+# 第二阶段：WebShop专用镜像（隔离环境）
+webshop_image = base_image.run_commands(
+    # 创建WebShop专用虚拟环境
+    "python -m venv /root/webshop_venv",
+    # 激活虚拟环境安装WebShop依赖
+    ". /root/webshop_venv/bin/activate && pip install beautifulsoup4 nmslib scikit-learn pandas"
 )
 
 volume = modal.Volume.from_name("ragen-models", create_if_missing=True)
 
 @app.function(
-    image=base_image,
+    image=webshop_image,
     gpu="A10G",
     timeout=86400,
     volumes={"/root/models": volume},
     secrets=[modal.Secret.from_name("my-huggingface-secret")]
 )
 def train_from_github():
-    """从GitHub克隆项目并使用WebShop训练"""
+    """从GitHub克隆项目并使用真实WebShop训练"""
     import os
     import sys
     from pathlib import Path
@@ -72,132 +70,130 @@ def train_from_github():
     os.chdir(project_dir)
     sys.path.insert(0, str(project_dir))
     
-    # ================== 启动WebShop服务器 ==================
-    print("🛠️ 启动WebShop服务器...")
-    webshop_process = None
+    # ================== 启动真实WebShop服务器 ==================
     
-    try:
-        # 1. 克隆官方WebShop仓库
-        webshop_dir = Path("/root/WebShop")
-        
-        # 清理旧目录
-        if webshop_dir.exists():
-            shutil.rmtree(webshop_dir)
-            print("🗑️ 清理旧WebShop目录")
-        
-        print("📥 克隆WebShop官方仓库...")
-        result = subprocess.run([
-            "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
-            str(webshop_dir)
-        ], capture_output=True, text=True, check=True, timeout=180)
-        
-        print("✅ WebShop仓库克隆完成")
-        
-        # 2. 安装WebShop完整依赖
-        print("📦 安装WebShop完整依赖...")
-        webshop_requirements = ["rich", "beautifulsoup4", "nmslib", "scikit-learn", "pandas", "flask", "flask-cors"]
-        for dep in webshop_requirements:
-            try:
-                subprocess.run(["pip", "install", dep], check=True, timeout=60)
-                print(f"✅ 安装 {dep} 成功")
-            except Exception as e:
-                print(f"⚠️ 安装 {dep} 失败: {e}")
+     # ================== 修正WebShop启动 ==================
+    print("🔧 修正WebShop启动方式...")
+    
+    # 1. 检查WebShop实际目录结构
+    webshop_dir = Path("/root/WebShop")
+    print("📁 WebShop目录结构:")
+    result = subprocess.run(["find", ".", "-name", "*.py", "-type", "f"], 
+                          cwd=str(webshop_dir), capture_output=True, text=True)
+    print(result.stdout)
+    
+    # 2. 查找正确的启动文件
+    possible_start_files = [
+        "run.py",
+        "server.py", 
+        "web_agent_site/server.py",
+        "web_agent_site/app.py",
+        "src/server.py"
+    ]
+    
+    start_file = None
+    for file in possible_start_files:
+        if (webshop_dir / file).exists():
+            start_file = file
+            print(f"✅ 找到启动文件: {file}")
+            break
+    
+    if not start_file:
+        print("❌ 未找到启动文件，尝试手动启动...")
+        # 手动启动方案
+        return manual_webshop_start(webshop_dir)
+    
+    # 3. 使用虚拟环境启动
+    print("🚀 使用虚拟环境启动WebShop...")
+    webshop_process = subprocess.Popen([
+        "/root/webshop_venv/bin/python", start_file, "--port", "3000"
+    ], cwd=str(webshop_dir), 
+       stdout=subprocess.PIPE, 
+       stderr=subprocess.PIPE,
+       text=True)
 
-        # 如果WebShop有requirements.txt，也安装
-        requirements_file = webshop_dir / "requirements.txt"
-        if requirements_file.exists():
-            print("📦 安装WebShop requirements.txt...")
-            subprocess.run(["pip", "install", "-r", str(requirements_file)], timeout=120)
+        # 3. 启动WebShop服务器
+        print("🚀 启动WebShop服务进程...")
         
-        # 3. 检查目录结构
-        print("📁 WebShop目录结构:")
+        # 先检查WebShop目录结构
+        print("📁 WebShop项目结构:")
         result = subprocess.run(["find", ".", "-name", "*.py", "-type", "f"], 
                               cwd=str(webshop_dir), capture_output=True, text=True)
-        print(result.stdout[:2000])
+        print(result.stdout[:1000])  # 只显示前1000字符
         
-        # 4. 查找正确的启动文件
-        possible_start_files = [
-            "run.py",
-            "server.py", 
-            "web_agent_site/server.py",
-            "web_agent_site/app.py",
-            "src/server.py"
-        ]
-        
-        start_file = None
-        for file in possible_start_files:
-            if (webshop_dir / file).exists():
-                start_file = file
-                print(f"✅ 找到启动文件: {file}")
-                break
-        
-        if not start_file:
-            print("❌ 未找到标准启动文件，使用模拟WebShop...")
-            webshop_process = create_simulated_webshop()
-            os.environ["USE_SIMULATED_WEBSHOP"] = "true"
-        else:
-            # 5. 启动WebShop服务器
-            print(f"🚀 启动WebShop服务: {start_file}")
-            webshop_process = subprocess.Popen([
-                "python", start_file, "--port", "3000"
-            ], cwd=str(webshop_dir), 
-               stdout=subprocess.PIPE, 
-               stderr=subprocess.PIPE,
-               text=True)
-            os.environ["USE_SIMULATED_WEBSHOP"] = "false"
+        webshop_process = subprocess.Popen([
+            "python", "run.py", "--port", "3000"
+        ], cwd=str(webshop_dir), 
+           stdout=subprocess.PIPE, 
+           stderr=subprocess.PIPE,
+           text=True)
 
-        # 6. 等待服务器启动
+        # 4. 等待服务器启动
         print("⏳ 等待WebShop服务器启动...")
         server_started = False
         
-        for i in range(30):
+        for i in range(60):  # 增加到60秒
             try:
                 # 检查进程是否存活
-                if webshop_process and webshop_process.poll() is not None:
+                if webshop_process.poll() is not None:
                     stdout, stderr = webshop_process.communicate()
                     print(f"❌ WebShop进程异常退出:")
                     print(f"STDOUT: {stdout}")
                     print(f"STDERR: {stderr}")
                     
-                    # 如果标准WebShop失败，回退到模拟版本
-                    if not os.environ.get("USE_SIMULATED_WEBSHOP") == "true":
-                        print("🔄 回退到模拟WebShop...")
-                        webshop_process = create_simulated_webshop()
-                        os.environ["USE_SIMULATED_WEBSHOP"] = "true"
+                    # 尝试诊断问题
+                    if "No module named" in stderr:
+                        print("🔧 检测到模块缺失，尝试安装依赖...")
+                        # 安装WebShop特定依赖
+                        requirements_file = webshop_dir / "requirements.txt"
+                        if requirements_file.exists():
+                            subprocess.run([
+                                "pip", "install", "-r", str(requirements_file)
+                            ], check=True, timeout=120)
+                            print("✅ 依赖安装完成，重新启动...")
+                            # 重新启动
+                            webshop_process = subprocess.Popen([
+                                "python", "run.py", "--port", "3000"
+                            ], cwd=str(webshop_dir), 
+                               stdout=subprocess.PIPE, 
+                               stderr=subprocess.PIPE,
+                               text=True)
+                            continue
                     break
                 
                 # 检查HTTP连接
                 response = requests.get("http://localhost:3000/", timeout=5)
                 if response.status_code == 200:
                     server_started = True
-                    webshop_mode = "模拟" if os.environ.get("USE_SIMULATED_WEBSHOP") == "true" else "真实"
-                    print(f"✅ {webshop_mode}WebShop服务器启动成功！")
+                    print("✅ WebShop服务器启动成功！")
                     break
                 else:
-                    if i % 5 == 0:
-                        print(f"⏳ 服务器状态码 {response.status_code}，继续等待... ({i+1}/30)")
+                    if i % 10 == 0:
+                        print(f"⏳ 服务器状态码 {response.status_code}，继续等待... ({i+1}/60)")
             except requests.exceptions.ConnectionError:
-                if i % 5 == 0:
-                    print(f"⏳ 连接拒绝，继续等待... ({i+1}/30)")
+                if i % 10 == 0:
+                    print(f"⏳ 连接拒绝，继续等待... ({i+1}/60)")
             except Exception as e:
-                if i % 5 == 0:
-                    print(f"⏳ 等待中... ({i+1}/30) - {str(e)[:100]}")
+                if i % 10 == 0:
+                    print(f"⏳ 等待中... ({i+1}/60) - {str(e)[:100]}")
             
             time.sleep(1)
         
         if not server_started:
-            print("❌ WebShop服务器启动失败，使用模拟环境继续训练")
-            os.environ["USE_SIMULATED_WEBSHOP"] = "true"
+            print("❌ WebShop服务器启动失败")
+            return {"status": "error", "message": "WebShop服务器启动失败"}
+        else:
+            print("🎯 真实WebShop环境准备就绪！")
+            os.environ["USE_SIMULATED_WEBSHOP"] = "false"
             
-    except Exception as e:
-        print(f"⚠️ WebShop服务器启动过程中出错: {e}")
-        print("🔄 使用模拟WebShop环境继续训练...")
-        os.environ["USE_SIMULATED_WEBSHOP"] = "true"
-        import traceback
-        traceback.print_exc()
+        except Exception as e:
+            print(f"⚠️ WebShop服务器启动过程中出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"status": "error", "message": f"WebShop启动失败: {str(e)}"}
     
     # ================== 开始训练 ==================
-    print("📁 项目文件结构:")
+     print("📁 项目文件结构:")
     for item in project_dir.rglob("*"):
         if item.is_file() and not any(part.startswith('.') for part in item.parts):
             print(f"  📄 {item.relative_to(project_dir)}")
@@ -220,12 +216,11 @@ def train_from_github():
             webshop_process.wait()
             print("🛑 WebShop服务器已停止")
         
-        webshop_mode = "模拟" if os.environ.get("USE_SIMULATED_WEBSHOP") == "true" else "真实"
         return {
             "status": "completed", 
             "message": "训练成功完成",
             "github_repo": repo_url,
-            "webshop_mode": webshop_mode
+            "webshop_mode": "real"
         }
         
     except Exception as e:
@@ -238,107 +233,6 @@ def train_from_github():
             webshop_process.terminate()
         
         return {"status": "error", "message": str(e)}
-
-def create_simulated_webshop():
-    """创建模拟WebShop服务器"""
-    from pathlib import Path  # 修复：添加导入
-    import tempfile
-    print("🎭 创建模拟WebShop服务器...")
-    
-    server_code = '''
-from flask import Flask, jsonify, request
-import random
-import time
-
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return jsonify({"status": "ready", "message": "WebShop Simulator", "mode": "simulated"})
-
-@app.route('/search/<query>')
-def search(query):
-    """模拟搜索功能"""
-    time.sleep(0.1)
-    
-    products = []
-    if "stainless steel water bottle" in query.lower():
-        products = [
-            {"id": "5001", "name": "Stainless Steel Water Bottle 1L", "price": 24.99, "material": "stainless steel"},
-            {"id": "5002", "name": "Insulated Steel Bottle 750ml", "price": 29.99, "material": "stainless steel"}
-        ]
-    elif "red" in query.lower() and "shirt" in query.lower():
-        products = [
-            {"id": "1001", "name": "Red Cotton T-Shirt", "price": 29.99, "color": "red", "size": "M"},
-            {"id": "1002", "name": "Red Polo Shirt", "price": 39.99, "color": "red", "size": "L"}
-        ]
-    elif "black" in query.lower() and "backpack" in query.lower():
-        products = [
-            {"id": "2001", "name": "Black Laptop Backpack", "price": 49.99, "has_laptop_compartment": True},
-            {"id": "2002", "name": "Black Travel Backpack", "price": 59.99, "has_laptop_compartment": True}
-        ]
-    else:
-        products = [
-            {"id": "3001", "name": "Generic Product", "price": 19.99, "description": "Try more specific search"}
-        ]
-    
-    return jsonify({"products": products, "query": query})
-
-@app.route('/click/<product_id>')
-def click(product_id):
-    """模拟点击商品"""
-    time.sleep(0.1)
-    
-    product_details = {
-        "5001": {"id": "5001", "name": "Stainless Steel Water Bottle 1L", "price": 24.99, "material": "stainless steel", "in_stock": True},
-        "5002": {"id": "5002", "name": "Insulated Steel Bottle 750ml", "price": 29.99, "material": "stainless steel", "in_stock": True},
-        "1001": {"id": "1001", "name": "Red Cotton T-Shirt", "price": 29.99, "color": "red", "in_stock": True},
-        "1002": {"id": "1002", "name": "Red Polo Shirt", "price": 39.99, "color": "red", "in_stock": True},
-        "2001": {"id": "2001", "name": "Black Laptop Backpack", "price": 49.99, "has_laptop_compartment": True, "in_stock": True},
-        "2002": {"id": "2002", "name": "Black Travel Backpack", "price": 59.99, "has_laptop_compartment": True, "in_stock": True}
-    }
-    
-    product = product_details.get(product_id, {"id": product_id, "name": "Unknown Product", "in_stock": False})
-    return jsonify(product)
-
-@app.route('/buy/<product_id>')
-def buy(product_id):
-    """模拟购买功能"""
-    time.sleep(0.2)
-    
-    if product_id in ["5001", "5002", "1001", "1002", "2001", "2002"]:
-        return jsonify({
-            "success": True,
-            "order_id": f"ORDER_{random.randint(1000,9999)}",
-            "product_id": product_id,
-            "message": "Purchase successful!"
-        })
-    else:
-        return jsonify({
-            "success": False,
-            "error": "Product not found"
-        }), 404
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=3000, debug=False)
-'''
-    
-    # 写入模拟服务器文件
-    temp_dir = tempfile.mkdtemp()
-    server_file = Path(temp_dir) / "simulated_webshop.py"
-    
-    with open(server_file, 'w') as f:
-        f.write(server_code)
-    
-    # 启动模拟服务器
-    webshop_process = subprocess.Popen([
-        "python", "simulated_webshop.py"
-    ], cwd=temp_dir,
-       stdout=subprocess.PIPE,
-       stderr=subprocess.PIPE,
-       text=True)
-    
-    return webshop_process
 
 def save_results_to_volume():
     """保存训练结果到共享卷"""
@@ -384,6 +278,89 @@ def download_results():
             print(f"  ✅ 下载: {item.name}")
     
     return {"status": "success", "files": downloaded_files}
+
+# 添加调试函数
+@app.function(image=webshop_image)
+def debug_webshop():
+    """调试WebShop安装"""
+    import subprocess
+    from pathlib import Path
+    import shutil
+    
+    print("🔧 调试WebShop安装...")
+    
+    webshop_dir = Path("/root/WebShop")
+    
+    # 清理旧目录
+    if webshop_dir.exists():
+        shutil.rmtree(webshop_dir)
+    
+    # 克隆WebShop
+    print("📥 克隆WebShop...")
+    result = subprocess.run([
+        "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
+        str(webshop_dir)
+    ], capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        print(f"❌ Git克隆失败: {result.stderr}")
+        return {"status": "error", "message": "Git克隆失败"}
+    
+    print("✅ 克隆成功")
+    
+    # 检查目录内容
+    print("📁 目录内容:")
+    result = subprocess.run(["ls", "-la"], cwd=str(webshop_dir), capture_output=True, text=True)
+    print(result.stdout)
+    
+    # 检查run.py
+    run_py = webshop_dir / "run.py"
+    print(f"run.py存在: {run_py.exists()}")
+    
+    if run_py.exists():
+        # 尝试安装requirements
+        requirements_file = webshop_dir / "requirements.txt"
+        if requirements_file.exists():
+            print("📦 安装requirements.txt...")
+            result = subprocess.run([
+                "pip", "install", "-r", str(requirements_file)
+            ], capture_output=True, text=True, timeout=180)
+            if result.returncode == 0:
+                print("✅ 依赖安装成功")
+            else:
+                print(f"⚠️ 依赖安装问题: {result.stderr}")
+        
+        # 尝试启动
+        print("🚀 尝试启动WebShop...")
+        process = subprocess.Popen(
+            ["python", "run.py", "--port", "3000"], 
+            cwd=str(webshop_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        import time
+        time.sleep(10)  # 等待10秒
+        
+        # 检查进程状态
+        if process.poll() is None:
+            print("✅ WebShop进程正在运行")
+            # 测试连接
+            try:
+                import requests
+                response = requests.get("http://localhost:3000/", timeout=5)
+                print(f"✅ 服务器响应: {response.status_code}")
+            except Exception as e:
+                print(f"❌ 连接失败: {e}")
+            process.terminate()
+        else:
+            stdout, stderr = process.communicate()
+            print(f"❌ 进程退出:")
+            print(f"STDOUT: {stdout}")
+            print(f"STDERR: {stderr}")
+    
+    return {"status": "debug_complete"}
 
 if __name__ == "__main__":
     with app.run():
