@@ -134,13 +134,20 @@ def train_from_github():
             subprocess.run([
                 "/root/webshop_venv/bin/pip", "install", "-r", str(requirements_file)
             ], check=True, timeout=600)  # 10分钟超时
+            
+            # 🔥 修复Werkzeug版本兼容性
+            print("🔧 修复Werkzeug版本兼容性...")
+            subprocess.run([
+                "/root/webshop_venv/bin/pip", "install", "werkzeug==2.0.3"
+            ], check=True)
+            
             print("✅ WebShop依赖安装完成")
         except Exception as e:
             print(f"❌ 依赖安装失败: {e}")
-            # 备选方案：只安装核心依赖
+            # 备选方案：安装核心依赖 + 正确版本的Werkzeug
             subprocess.run([
                 "/root/webshop_venv/bin/pip", "install", 
-                "flask==2.1.2", "requests==2.27.1", "numpy==1.22.4"
+                "flask==2.1.2", "requests==2.27.1", "numpy==1.22.4", "werkzeug==2.0.3"
             ], check=False)
 
     # 5. 使用虚拟环境启动
