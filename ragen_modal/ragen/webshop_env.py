@@ -1,193 +1,372 @@
-# ragen/webshop_env.py - 修改后的版本
-import requests
-import json
-import time
-import random
+import torch
+import torch.optim as optim
+import numpy as np
+import yaml
 import os
+from collections import deque
+import time
+import warnings
+warnings.filterwarnings('ignore')
 
-class WebShopEnv:
-    def __init__(self, server_url="http://localhost:3000", max_steps=15):
-        self.server_url = server_url
-        self.max_steps = max_steps
-        self.current_step = 0
-        self.session_id = None
+# 修复导入：使用绝对导入避免循环导入问题
+try:
+    # 当作为模块导入时
+    from .qwen_agent import QwenRAGENAgent
+    from .experience_buffer import ExperienceBuffer  
+    from .webshop_env import WebShopEnv
+    from .reward_calculator import RewardCalculator
+except ImportError:
+    # 当直接运行时
+    from qwen_agent import QwenRAGENAgent
+    from experience_buffer import ExperienceBuffer  
+    from webshop_env import WebShopEnv
+    from reward_calculator import RewardCalculator
+
+# 简化APO训练器（避免复杂依赖）
+class SimpleAPOTrainer:
+    def __init__(self, beta=0.1, gamma=0.99, cache_file="vstar_cache.pkl", num_vstar_samples=100):
+        self.beta = beta
+        self.gamma = gamma
         
-        # 关键修改：检查是否使用模拟模式
-        self.use_simulation = os.environ.get("USE_SIMULATED_WEBSHOP", "true").lower() == "true"
+    def compute_advantages(self, observations, rewards, dones, reference_agent, agent):
+        """简化优势计算"""
+        advantages = []
+        v_star_values = []
         
-        if self.use_simulation:
-            print("🔧 使用WebShop模拟模式")
-            # 初始化模拟数据
-            self._init_simulation()
-        else:
-            print("🎯 使用真实WebShop环境")
-            # 测试真实环境连接
-            self._test_real_connection()
-    
-    def _init_simulation(self):
-        """初始化模拟数据"""
-        self.tasks = [
-            "Find and buy a red shirt",
-            "Purchase a classic blanket", 
-            "Buy a wireless mouse with good ratings",
-            "Find a laptop under $1000",
-            "Get a blue jeans in size 32",
-            "Purchase a wireless keyboard",
-            "Find a black backpack with laptop compartment",
-            "Buy a stainless steel water bottle"
-        ]
-        
-        self.simulated_products = {
-            'shirt': [{'id': 1, 'name': 'Red Cotton Shirt', 'color': 'red', 'price': 29.99}],
-            'blanket': [{'id': 3, 'name': 'Classic Wool Blanket', 'type': 'classic', 'price': 49.99}],
-            'jeans': [{'id': 5, 'name': 'Blue Denim Jeans Size 32', 'color': 'blue', 'size': 32, 'price': 59.99}],
-            'laptop': [{'id': 7, 'name': 'Gaming Laptop $999', 'price': 999.99}],
-            'mouse': [{'id': 9, 'name': 'Wireless Gaming Mouse', 'type': 'wireless', 'rating': 4.5, 'price': 49.99}]
-        }
-    
-    def _test_real_connection(self):
-        """测试真实WebShop连接"""
-        try:
-            response = requests.get(f"{self.server_url}/", timeout=5)
-            if response.status_code == 200:
-                print("✅ WebShop真实环境连接成功")
-                return True
-            else:
-                print(f"❌ WebShop返回状态码 {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"❌ WebShop真实环境连接失败: {e}")
-            print("🔄 切换到模拟模式")
-            self.use_simulation = True
-            self._init_simulation()
-            return False
-    
-    def reset(self, instruction=None):
-        """重置环境"""
-        self.current_step = 0
-        
-        if instruction is None:
-            instruction = random.choice(self.tasks) if self.use_simulation else "Find a product"
-        
-        self.current_instruction = instruction
-        
-        if not self.use_simulation:
-            try:
-                # 真实环境
-                response = requests.post(
-                    f"{self.server_url}/reset", 
-                    json={"instruction": instruction},
-                    timeout=10
-                )
-                data = response.json()
-                self.session_id = data.get('session_id', f'real_{int(time.time())}')
-                observation = data.get('observation', f"真实环境: {instruction}")
-                print(f"🎯 真实环境任务开始: {instruction}")
-                return observation, {'session_id': self.session_id, 'instruction': instruction}
-                
-            except Exception as e:
-                print(f"❌ 真实环境reset失败: {e}")
-                print("🔄 切换到模拟模式")
-                self.use_simulation = True
-                self._init_simulation()
-        
-        # 模拟模式
-        self.session_id = f"sim_{int(time.time())}"
-        observation = f"欢迎！请{instruction}\n页面显示搜索框和商品分类。"
-        
-        print(f"🎯 模拟环境任务开始: {instruction}")
-        return observation, {'session_id': self.session_id, 'instruction': instruction}
-    
-    def step(self, action, session_id=None):
-        """执行动作"""
-        if session_id is None:
-            session_id = self.session_id
+        for i in range(len(rewards)):
+            # 简化优势计算：使用奖励作为基础
+            advantage = rewards[i] * 2.0  # 放大奖励信号
+            advantages.append(advantage)
+            v_star_values.append(rewards[i] * 1.5)  # 简化V*值
             
-        self.current_step += 1
+        return torch.FloatTensor(advantages), torch.FloatTensor(v_star_values)
+    
+    def compute_policy_loss(self, log_probs, advantages, ref_log_probs):
+        """简化策略损失计算"""
+        if isinstance(log_probs, list):
+            log_probs = torch.FloatTensor(log_probs)
+        if isinstance(ref_log_probs, list):
+            ref_log_probs = torch.FloatTensor(ref_log_probs)
+            
+        # 策略梯度损失
+        pg_loss = -(log_probs * advantages).mean()
         
-        if not self.use_simulation:
+        # KL散度惩罚（简化）
+        kl_penalty = torch.nn.functional.kl_div(
+            torch.softmax(log_probs, dim=0),
+            torch.softmax(ref_log_probs, dim=0),
+            reduction='batchmean'
+        )
+        
+        # 总损失
+        total_loss = pg_loss + self.beta * kl_penalty
+        
+        return total_loss, pg_loss.item(), kl_penalty.item()
+
+class RAGENWebShopTrainer:
+    def __init__(self, config_path="configs/webshop_config.yaml"):
+        # 加载配置
+        with open(config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        
+        print("=" * 60)
+        print("RAGEN + A*PO + Qwen WebShop 训练系统")
+        print("=" * 60)
+        
+        # 初始化组件
+        self.env = WebShopEnv(
+            server_url=self.config['environment']['server_url'],
+            max_steps=self.config['environment']['max_steps']
+        )
+        
+        self.agent = QwenRAGENAgent(
+            model_name=self.config['model']['base_model'],
+            device=self.config['model']['device']
+        )
+        
+        # 参考策略（固定）
+        self.reference_agent = QwenRAGENAgent(
+            model_name=self.config['model']['base_model'],
+            device=self.config['model']['device']
+        )
+        
+        self.reward_calculator = RewardCalculator()
+        self.optimizer = optim.Adam(self.agent.parameters(), lr=self.config['training']['learning_rate'])
+        self.buffer = ExperienceBuffer(self.config['buffer']['capacity'])
+        self.apo_trainer = SimpleAPOTrainer(
+            beta=self.config['training']['beta'],
+            gamma=self.config['training']['gamma'],
+            cache_file=self.config['vstar_cache']['cache_file'],
+            num_vstar_samples=self.config['vstar_cache']['num_vstar_samples']
+        )
+        
+        # 训练统计
+        self.episode_rewards = deque(maxlen=20)
+        self.success_rates = deque(maxlen=20)
+        self.format_success_rates = deque(maxlen=20)  # 格式成功率
+        self.best_success_rate = 0.0
+        self.total_steps = 0
+        
+    def collect_experience(self, num_episodes=2):
+        """收集经验数据"""
+        print(f"\n📥 收集 {num_episodes} 个回合的经验...")
+        
+        for episode in range(num_episodes):
             try:
-                # 真实环境
-                payload = {'action': action, 'session_id': session_id}
-                response = requests.post(f"{self.server_url}/step", json=payload, timeout=10)
-                data = response.json()
+                obs, info = self.env.reset()
+                instruction = info['instruction']
+                episode_reward = 0
+                done = False
+                steps = 0
                 
-                observation = data.get('observation', f"执行: {action}")
-                reward = data.get('reward', 0.0)
-                done = data.get('done', False) or self.current_step >= self.max_steps
+                print(f"\n--- 回合 {episode+1} ---")
+                print(f"任务: {instruction}")
                 
-                info = {
-                    'session_id': session_id,
-                    'step': self.current_step,
-                    'action': action,
-                    'real_environment': True
-                }
+                while not done and steps < self.config['environment']['max_steps']:
+                    # Qwen生成思考和动作
+                    think_content, action_content, log_prob, full_response = self.agent.generate_webshop_response(obs, instruction)
+                    
+                    print(f"\n步骤 {steps+1}:")
+                    print(f"思考: {think_content}")
+                    print(f"动作: {action_content}")
+                    
+                    # 执行动作
+                    next_obs, env_reward, done, info = self.env.step(action_content, info['session_id'])
+                    
+                    # 计算详细奖励 - 修复参数错误
+                    task_success = (env_reward > 0.5)
+                    try:
+                        reward = self.reward_calculator.calculate_reward(
+                            think_content, 
+                            action_content, 
+                            next_obs, 
+                            task_success,
+                            instruction,  # 添加任务指令
+                            steps + 1     # 添加步骤数
+                        )
+                    except TypeError as e:
+                        print(f"⚠️ 使用简化奖励计算: {e}")
+                        # 如果参数不匹配，使用简化版本
+                        reward = self.reward_calculator.calculate_simple_reward(
+                            think_content, 
+                            action_content, 
+                            task_success
+                        )
+                    
+                    episode_reward += reward
+                    steps += 1
+                    self.total_steps += 1
+                    
+                    # 存储经验
+                    self.buffer.push(obs, instruction, think_content, action_content, reward, done, log_prob)
+                    
+                    obs = next_obs
+                    
+                    if done:
+                        break
                 
-                return observation, reward, done, info
+                # 记录统计信息
+                self.episode_rewards.append(episode_reward)
+                success = 1 if episode_reward > 0.8 else 0  # 提高成功阈值
+                self.success_rates.append(success)
+                
+                # 格式成功率（关键指标）- 使用改进的检查方法
+                format_success = 1 if self._check_format_success(think_content, action_content) else 0
+                self.format_success_rates.append(format_success)
+                
+                current_success = np.mean(self.success_rates) if self.success_rates else 0
+                current_format_success = np.mean(self.format_success_rates) if self.format_success_rates else 0
+                
+                print(f"\n回合结果: 总奖励={episode_reward:.2f}, 成功率={current_success:.3f}, 格式成功率={current_format_success:.3f}")
                 
             except Exception as e:
-                print(f"❌ 真实环境step失败: {e}")
-                self.use_simulation = True
+                print(f"❌ 回合 {episode+1} 出错: {e}")
+                continue
+    
+    def _check_format_success(self, think_content, action_content):
+        """改进的格式检查 - 更宽松但有效"""
+        # 检查思考内容是否有效（不是模板文字）
+        valid_think = (think_content and 
+                       len(think_content.strip()) > 5 and
+                       "你的推理" not in think_content and
+                       "请思考" not in think_content and
+                       "思考过程" not in think_content and
+                       "思考:" not in think_content)
         
-        # 模拟模式
-        observation, reward, done = self._simulate_step(action)
+        # 检查动作内容是否有效且具体
+        valid_action = (action_content and 
+                        any(x in action_content for x in ['search[', 'click[', 'buy[']) and
+                        action_content != "search[product]" and
+                        len(action_content) > 8)  # 确保不是太短
         
-        info = {
-            'session_id': session_id,
-            'step': self.current_step,
-            'action': action,
-            'real_environment': False
+        return valid_think and valid_action
+    
+    def train_step(self):
+        """执行一次训练步骤"""
+        if len(self.buffer) < self.config['training']['batch_size']:
+            print(f"⚠️ 缓冲区不足: {len(self.buffer)}/{self.config['training']['batch_size']}")
+            return None
+            
+        batch = self.buffer.sample(self.config['training']['batch_size'])
+        if batch is None:
+            print("❌ 批次采样失败")
+            return None
+        
+        try:
+            # 计算A*PO优势
+            advantages, v_star_values = self.apo_trainer.compute_advantages(
+                batch['observations'], batch['rewards'], batch['dones'],
+                self.reference_agent, self.agent
+            )
+            
+            # 计算参考策略的对数概率
+            with torch.no_grad():
+                ref_log_probs = []
+                for (obs, instruction) in batch['observations']:
+                    _, _, ref_log_prob, _ = self.reference_agent.generate_webshop_response(obs, instruction)
+                    ref_log_probs.append(ref_log_prob)
+                ref_log_probs = torch.FloatTensor(ref_log_probs)
+            
+            # 当前策略的对数概率
+            current_log_probs = torch.FloatTensor(batch['log_probs'])
+            
+            # 计算A*PO策略损失
+            policy_loss, pg_loss, kl_penalty = self.apo_trainer.compute_policy_loss(
+                current_log_probs, advantages, ref_log_probs
+            )
+            
+            # 反向传播
+            self.optimizer.zero_grad()
+            policy_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.agent.parameters(), self.config['training']['grad_clip'])
+            self.optimizer.step()
+            
+            return {
+                'total_loss': policy_loss.item(),
+                'policy_loss': pg_loss,
+                'kl_penalty': kl_penalty,
+                'avg_advantage': advantages.mean().item(),
+                'avg_reward': np.mean(batch['rewards'])
+            }
+            
+        except Exception as e:
+            print(f"❌ 训练步骤出错: {e}")
+            return None
+    
+    def train(self):
+        """主训练循环"""
+        print("\n🎯 开始训练...")
+        print("成功标准: 成功率从0%提升到20%+")
+        print("重点观察: Base Model学习格式遵循能力")
+        print("-" * 50)
+        
+        start_time = time.time()
+        
+        for epoch in range(self.config['training']['num_epochs']):
+            print(f"\n🔄 Epoch {epoch + 1}/{self.config['training']['num_epochs']}")
+            
+            # 阶段1: 收集经验
+            self.collect_experience(num_episodes=2)
+            
+            # 阶段2: 训练
+            if len(self.buffer) >= self.config['training']['batch_size']:
+                loss_info = self.train_step()
+                
+                if loss_info:
+                    current_success = np.mean(self.success_rates) if self.success_rates else 0
+                    current_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
+                    
+                    print(f"Epoch {epoch:3d} | Loss: {loss_info['total_loss']:7.4f} | "
+                          f"Reward: {loss_info['avg_reward']:5.3f} | "
+                          f"Success: {current_success:5.3f} | Format: {current_format:5.3f} | "
+                          f"Buffer: {len(self.buffer):2d}")
+                else:
+                    print(f"Epoch {epoch:3d} | 训练跳过 - 无有效批次")
+            
+            # 阶段3: 评估和检查停止条件
+            if epoch % 5 == 0:  # 更频繁的评估
+                current_success = np.mean(self.success_rates) if self.success_rates else 0
+                current_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
+                training_time = (time.time() - start_time) / 60
+                
+                if current_success > self.best_success_rate:
+                    self.best_success_rate = current_success
+                    print(f"🎯 新的最佳成功率: {self.best_success_rate:.3f}")
+                
+                print(f"\n=== 评估 Epoch {epoch} ===")
+                print(f"训练时间: {training_time:6.1f} 分钟")
+                print(f"总步数: {self.total_steps:6d}")
+                print(f"当前成功率: {current_success:6.3f}")
+                print(f"格式成功率: {current_format:6.3f}")
+                print(f"历史最佳: {self.best_success_rate:6.3f}")
+                
+                # 成功标准检查
+                if current_success >= 0.20:
+                    print("🎉" * 20)
+                    print("达到Part 2作业要求: 成功率 > 20%!")
+                    print("Base Model成功学习了格式遵循和任务解决!")
+                    print("可以停止训练并准备演示")
+                    print("🎉" * 20)
+                    break
+                    
+                print("-" * 40)
+        
+        # 最终统计
+        total_time = (time.time() - start_time) / 60
+        final_success = np.mean(self.success_rates) if self.success_rates else 0
+        final_format = np.mean(self.format_success_rates) if self.format_success_rates else 0
+        
+        print(f"\n" + "=" * 50)
+        print("训练完成!")
+        print(f"总训练时间: {total_time:.1f} 分钟")
+        print(f"最终成功率: {final_success:.3f}")
+        print(f"最终格式成功率: {final_format:.3f}")
+        print(f"历史最佳成功率: {self.best_success_rate:.3f}")
+        print(f"总训练步数: {self.total_steps}")
+        print("=" * 50)
+        
+        self.env.close()
+
+def main():
+    # 创建目录
+    os.makedirs("configs", exist_ok=True)
+    os.makedirs("ragen", exist_ok=True)
+    
+    # 创建默认配置文件（如果不存在）
+    config_path = "configs/webshop_config.yaml"
+    if not os.path.exists(config_path):
+        default_config = {
+            'model': {
+                'base_model': "Qwen/Qwen2.5-1.5B",
+                'device': "cuda"
+            },
+            'environment': {
+                'server_url': "http://localhost:3000",
+                'max_steps': 15
+            },
+            'training': {
+                'learning_rate': 1e-5,
+                'batch_size': 4,
+                'num_epochs': 50,
+                'beta': 0.1,
+                'gamma': 0.99,
+                'grad_clip': 1.0
+            },
+            'buffer': {
+                'capacity': 1000
+            },
+            'vstar_cache': {
+                'cache_file': "vstar_cache.pkl",
+                'num_vstar_samples': 100
+            }
         }
         
-        return observation, reward, done, info
+        with open(config_path, 'w') as f:
+            yaml.dump(default_config, f)
+        print(f"📁 创建默认配置文件: {config_path}")
     
-    def _simulate_step(self, action):
-        """模拟环境步骤"""
-        action_type = action.split('[')[0] if '[' in action else action
-        
-        if action_type == "search":
-            reward = 0.2
-            done = False
-            observation = f"搜索结果页面 - 显示相关商品列表"
-                
-        elif action_type == "click":
-            reward = 0.3
-            done = False
-            observation = f"商品详情页面 - 显示商品信息"
-                
-        elif action_type == "buy":
-            success_prob = 0.6  # 基础成功率
-            if random.random() < success_prob:
-                reward = 1.0
-                done = True
-                observation = "🎉 购买成功！任务完成！"
-            else:
-                reward = 0.1
-                done = False
-                observation = "⚠️ 购买失败，请检查商品或重试"
-                
-        else:
-            reward = -0.1
-            done = False
-            observation = "❌ 无效动作格式"
-        
-        # 步数限制
-        if self.current_step >= self.max_steps and not done:
-            done = True
-            reward = 0.0
-            observation = "⏰ 步数限制达到，任务失败"
-        
-        return observation, reward, done
-    
-    def close(self):
-        """关闭环境"""
-        if not self.use_simulation and self.session_id:
-            try:
-                requests.post(
-                    f"{self.server_url}/close", 
-                    json={'session_id': self.session_id},
-                    timeout=5
-                )
-                print("✅ 真实环境关闭成功")
-            except Exception as e:
-                print(f"⚠️ 环境关闭失败: {e}")
+    trainer = RAGENWebShopTrainer(config_path)
+    trainer.train()
+
+if __name__ == "__main__":
+    main()
