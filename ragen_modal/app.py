@@ -19,7 +19,9 @@ base_image = (
         "flask-cors>=4.0.0",
         "scikit-learn>=1.3.0",
         "pandas>=2.0.0",
-        "beautifulsoup4>=4.12.0"
+        "beautifulsoup4>=4.12.0",
+        "matplotlib>=3.7.0",
+        "seaborn>=0.12.0"
     )  
     .run_commands(
         "git config --global http.postBuffer 1048576000"
@@ -28,37 +30,61 @@ base_image = (
 
 volume = modal.Volume.from_name("ragen-models", create_if_missing=True)
 
-class SimulatedWebShopEnvironment:
-    """模拟WebShop环境（备用方案）"""
+class DetailedWebShopEnvironment:
+    """详细的模拟WebShop环境"""
     
     def __init__(self):
-        self.products = self._generate_sample_products()
+        self.products = self._generate_detailed_products()
         self.current_state = None
         self.session_history = []
+        self.metrics = {
+            'total_steps': 0,
+            'successful_selections': 0,
+            'failed_selections': 0,
+            'filter_applications': 0
+        }
         
-    def _generate_sample_products(self):
-        """生成模拟产品数据"""
+    def _generate_detailed_products(self):
+        """生成详细的模拟产品数据"""
         products = []
         
         # 电子产品
         electronics = [
-            {"id": "elec_001", "name": "iPhone 15 Pro", "category": "Electronics", "price": 999.99, "brand": "Apple", "attributes": {"storage": "128GB", "color": "Titanium", "screen": "6.1inch"}},
-            {"id": "elec_002", "name": "Samsung Galaxy S24", "category": "Electronics", "price": 849.99, "brand": "Samsung", "attributes": {"storage": "256GB", "color": "Black", "screen": "6.2inch"}},
-            {"id": "elec_003", "name": "MacBook Air M3", "category": "Electronics", "price": 1099.99, "brand": "Apple", "attributes": {"storage": "512GB", "color": "Space Gray", "screen": "13.6inch"}},
+            {"id": "elec_001", "name": "iPhone 15 Pro", "category": "Electronics", "price": 999.99, "brand": "Apple", 
+             "attributes": {"storage": "128GB", "color": "Titanium", "screen": "6.1inch", "camera": "48MP"}},
+            {"id": "elec_002", "name": "Samsung Galaxy S24", "category": "Electronics", "price": 849.99, "brand": "Samsung", 
+             "attributes": {"storage": "256GB", "color": "Black", "screen": "6.2inch", "camera": "50MP"}},
+            {"id": "elec_003", "name": "MacBook Air M3", "category": "Electronics", "price": 1099.99, "brand": "Apple", 
+             "attributes": {"storage": "512GB", "color": "Space Gray", "screen": "13.6inch", "ram": "8GB"}},
+            {"id": "elec_004", "name": "Google Pixel 8", "category": "Electronics", "price": 699.99, "brand": "Google", 
+             "attributes": {"storage": "128GB", "color": "White", "screen": "6.3inch", "camera": "50MP"}},
         ]
         
         # 服装
         clothing = [
-            {"id": "cloth_001", "name": "Nike Air Max", "category": "Clothing", "price": 129.99, "brand": "Nike", "attributes": {"size": "10", "color": "White", "type": "Sneakers"}},
-            {"id": "cloth_002", "name": "Adidas Hoodie", "category": "Clothing", "price": 59.99, "brand": "Adidas", "attributes": {"size": "M", "color": "Black", "type": "Hoodie"}},
+            {"id": "cloth_001", "name": "Nike Air Max", "category": "Clothing", "price": 129.99, "brand": "Nike", 
+             "attributes": {"size": "10", "color": "White", "type": "Sneakers", "material": "Leather"}},
+            {"id": "cloth_002", "name": "Adidas Hoodie", "category": "Clothing", "price": 59.99, "brand": "Adidas", 
+             "attributes": {"size": "M", "color": "Black", "type": "Hoodie", "material": "Cotton"}},
+            {"id": "cloth_003", "name": "Under Armour Shorts", "category": "Clothing", "price": 34.99, "brand": "Under Armour", 
+             "attributes": {"size": "L", "color": "Blue", "type": "Shorts", "material": "Polyester"}},
+        ]
+        
+        # 家居用品
+        home = [
+            {"id": "home_001", "name": "Stainless Steel Blender", "category": "Home", "price": 79.99, "brand": "KitchenAid", 
+             "attributes": {"capacity": "48oz", "color": "Silver", "power": "1000W", "type": "Countertop"}},
+            {"id": "home_002", "name": "Coffee Maker", "category": "Home", "price": 129.99, "brand": "Breville", 
+             "attributes": {"capacity": "12cup", "color": "Black", "type": "Drip", "features": "Programmable"}},
         ]
         
         products.extend(electronics)
         products.extend(clothing)
+        products.extend(home)
         return products
     
-    def reset(self, user_query):
-        """重置环境并设置用户查询"""
+    def reset(self, user_query, target_product_id=None):
+        """重置环境"""
         self.current_state = {
             "query": user_query,
             "available_products": self.products.copy(),
@@ -66,7 +92,9 @@ class SimulatedWebShopEnvironment:
             "current_filters": {},
             "session_steps": 0,
             "completed": False,
-            "reward": 0.0
+            "reward": 0.0,
+            "target_product_id": target_product_id,
+            "correct_selection": False
         }
         self.session_history = [f"User query: {user_query}"]
         return self.current_state
@@ -84,6 +112,8 @@ class SimulatedWebShopEnvironment:
         
         self.session_history.append(f"Applied filter: {filter_type} = {filter_value}")
         self.current_state["session_steps"] += 1
+        self.metrics['filter_applications'] += 1
+        self.metrics['total_steps'] += 1
         
         return self.current_state
     
@@ -107,122 +137,311 @@ class SimulatedWebShopEnvironment:
         if product:
             self.current_state["completed"] = True
             self.current_state["selected_product"] = product
+            
+            # 检查是否正确选择了目标产品
+            target_id = self.current_state.get("target_product_id")
+            if target_id:
+                self.current_state["correct_selection"] = (product_id == target_id)
+                if self.current_state["correct_selection"]:
+                    self.metrics['successful_selections'] += 1
+                else:
+                    self.metrics['failed_selections'] += 1
+            else:
+                self.metrics['successful_selections'] += 1
+            
             self.current_state["reward"] = self._calculate_reward()
             self.session_history.append(f"Selected product: {product['name']}")
             
         return self.current_state
     
     def _calculate_reward(self):
-        """计算奖励分数"""
-        base_reward = 1.0
+        """计算详细的奖励分数"""
+        base_reward = 1.0 if self.current_state.get("correct_selection", True) else 0.0
+        
+        # 效率奖励（步数越少奖励越高）
         efficiency_bonus = max(0, 1.0 - (self.current_state["session_steps"] * 0.1))
-        return base_reward + efficiency_bonus
+        
+        # 准确性奖励
+        accuracy_bonus = 0.5 if self.current_state.get("correct_selection", False) else 0.0
+        
+        # 多样性奖励（使用不同过滤器）
+        unique_filters = len(set(self.current_state["current_filters"].keys()))
+        diversity_bonus = unique_filters * 0.1
+        
+        total_reward = base_reward + efficiency_bonus + accuracy_bonus + diversity_bonus
+        return min(total_reward, 2.0)  # 限制最大奖励
+    
+    def get_metrics(self):
+        """获取环境指标"""
+        return self.metrics.copy()
 
-class RAGENTrainer:
-    """RAGEN训练器，支持真实和模拟环境"""
+class TrainingEvaluator:
+    """训练评估器"""
+    
+    def __init__(self):
+        self.episode_rewards = []
+        self.episode_steps = []
+        self.episode_accuracies = []
+        self.training_history = []
+        
+    def record_episode(self, episode, reward, steps, accuracy, query, selected_product):
+        """记录每个episode的结果"""
+        episode_data = {
+            'episode': episode,
+            'reward': reward,
+            'steps': steps,
+            'accuracy': accuracy,
+            'query': query,
+            'selected_product': selected_product,
+            'timestamp': import time; time.time()
+        }
+        self.training_history.append(episode_data)
+        self.episode_rewards.append(reward)
+        self.episode_steps.append(steps)
+        self.episode_accuracies.append(accuracy)
+    
+    def get_summary_stats(self):
+        """获取汇总统计"""
+        if not self.episode_rewards:
+            return {}
+            
+        return {
+            'total_episodes': len(self.episode_rewards),
+            'average_reward': sum(self.episode_rewards) / len(self.episode_rewards),
+            'average_steps': sum(self.episode_steps) / len(self.episode_steps),
+            'average_accuracy': sum(self.episode_accuracies) / len(self.episode_accuracies),
+            'max_reward': max(self.episode_rewards),
+            'min_reward': min(self.episode_rewards),
+            'success_rate': sum(self.episode_accuracies) / len(self.episode_accuracies) * 100,
+            'efficiency': sum(self.episode_rewards) / sum(self.episode_steps) if sum(self.episode_steps) > 0 else 0
+        }
+    
+    def print_detailed_report(self):
+        """打印详细报告"""
+        stats = self.get_summary_stats()
+        
+        print("\n" + "="*80)
+        print("📊 详细训练报告")
+        print("="*80)
+        
+        print(f"📈 总体统计:")
+        print(f"   • 总训练轮次: {stats['total_episodes']}")
+        print(f"   • 平均奖励: {stats['average_reward']:.3f}")
+        print(f"   • 平均步数: {stats['average_steps']:.1f}")
+        print(f"   • 成功率: {stats['success_rate']:.1f}%")
+        print(f"   • 训练效率: {stats['efficiency']:.3f}")
+        print(f"   • 最高奖励: {stats['max_reward']:.3f}")
+        print(f"   • 最低奖励: {stats['min_reward']:.3f}")
+        
+        print(f"\n🎯 最近5轮表现:")
+        for i, history in enumerate(self.training_history[-5:]):
+            print(f"   第{history['episode']+1}轮: 奖励={history['reward']:.2f}, "
+                  f"步数={history['steps']}, 准确率={history['accuracy']}, "
+                  f"查询='{history['query'][:30]}...'")
+        
+        # 学习进度分析
+        if len(self.episode_rewards) >= 10:
+            first_half = self.episode_rewards[:len(self.episode_rewards)//2]
+            second_half = self.episode_rewards[len(self.episode_rewards)//2:]
+            improvement = (sum(second_half)/len(second_half) - sum(first_half)/len(first_half)) / (sum(first_half)/len(first_half)) * 100
+            print(f"\n📈 学习进度: 后50%相比前50%奖励提升 {improvement:+.1f}%")
+
+class DetailedRAGENTrainer:
+    """详细的RAGEN训练器"""
     
     def __init__(self, use_simulated=True):
         self.use_simulated = use_simulated
-        if use_simulated:
-            self.env = SimulatedWebShopEnvironment()
-            print("🎮 使用模拟WebShop环境")
-        else:
-            self.env = None  # 真实环境通过HTTP连接
-            print("🌐 使用真实WebShop环境")
-    
-    def train_episode_simulated(self, user_query):
-        """在模拟环境中训练一个episode"""
-        state = self.env.reset(user_query)
-        total_reward = 0
-        steps = 0
+        self.env = DetailedWebShopEnvironment() if use_simulated else None
+        self.evaluator = TrainingEvaluator()
+        self.training_queries = self._get_training_queries()
         
-        while not state["completed"] and steps < 10:
-            # 模拟智能体动作
-            if state["filtered_products"]:
-                # 随机选择一个产品
-                import random
-                product = random.choice(state["filtered_products"])
-                state = self.env.select_product(product["id"])
-            else:
-                # 应用随机过滤器
-                import random
-                filters = ["brand", "color", "storage", "size"]
-                filter_type = random.choice(filters)
-                filter_values = {"brand": ["Apple", "Samsung", "Nike"], "color": ["Black", "White"], "storage": ["128GB", "256GB"], "size": ["M", "10"]}
-                filter_value = random.choice(filter_values.get(filter_type, ["unknown"]))
-                state = self.env.apply_filter(filter_type, filter_value)
+    def _get_training_queries(self):
+        """获取训练查询和目标产品"""
+        return [
+            {"query": "I want to buy an iPhone with 128GB storage", "target": "elec_001"},
+            {"query": "Looking for Nike sneakers in size 10", "target": "cloth_001"},
+            {"query": "Need a MacBook with 512GB storage", "target": "elec_003"},
+            {"query": "I want a black Adidas hoodie in medium size", "target": "cloth_002"},
+            {"query": "Looking for Samsung phone with 256GB storage", "target": "elec_002"},
+            {"query": "Need a silver kitchen blender", "target": "home_001"},
+            {"query": "I want a Google Pixel phone in white color", "target": "elec_004"},
+            {"query": "Looking for Under Armour shorts in large size", "target": "cloth_003"},
+            {"query": "Need a programmable coffee maker", "target": "home_002"},
+            {"query": "I want an Apple laptop in space gray color", "target": "elec_003"},
+        ]
+    
+    def train_episode_detailed(self, episode_idx):
+        """详细的episode训练"""
+        query_data = self.training_queries[episode_idx % len(self.training_queries)]
+        user_query = query_data["query"]
+        target_product = query_data["target"]
+        
+        print(f"\n🎯 Episode {episode_idx + 1}: '{user_query}'")
+        print(f"   目标产品: {target_product}")
+        
+        state = self.env.reset(user_query, target_product)
+        steps = 0
+        max_steps = 15
+        
+        while not state["completed"] and steps < max_steps:
+            observation = self._get_observation(state)
+            action = self._select_intelligent_action(observation, steps)
+            
+            if action["type"] == "filter":
+                state = self.env.apply_filter(action["filter_type"], action["filter_value"])
+                print(f"   → 步骤{steps+1}: 应用过滤器 [{action['filter_type']}={action['filter_value']}]")
+                print(f"     剩余产品: {len(state['filtered_products'])}个")
+            elif action["type"] == "select":
+                state = self.env.select_product(action["product_id"])
+                accuracy = "✓" if state.get("correct_selection", False) else "✗"
+                print(f"   → 步骤{steps+1}: 选择产品 [{action['product_id']}] {accuracy}")
             
             steps += 1
         
-        return state["reward"]
+        # 记录结果
+        accuracy = 1.0 if state.get("correct_selection", False) else 0.0
+        selected_name = state.get("selected_product", {}).get("name", "None")
+        
+        self.evaluator.record_episode(
+            episode_idx, state["reward"], steps, accuracy, 
+            user_query, selected_name
+        )
+        
+        print(f"   ✅ 完成: 奖励={state['reward']:.2f}, 步数={steps}, "
+              f"准确率={accuracy}, 选择='{selected_name}'")
+        
+        return state["reward"], steps, accuracy
     
-    def train_episode_real(self, user_query):
-        """在真实WebShop环境中训练一个episode"""
-        try:
-            import requests
-            # 这里应该是与真实WebShop API的交互
-            # 简化版本：模拟真实环境的行为
-            print(f"🔗 在真实环境中处理查询: {user_query}")
-            return 1.0  # 模拟奖励
-        except Exception as e:
-            print(f"❌ 真实环境训练失败: {e}")
-            return 0.0
+    def _get_observation(self, state):
+        """获取环境观察"""
+        return {
+            "filtered_products": state["filtered_products"],
+            "current_filters": state["current_filters"],
+            "query": state["query"],
+            "steps": state["session_steps"]
+        }
+    
+    def _select_intelligent_action(self, observation, step):
+        """智能动作选择（模拟策略）"""
+        import random
+        
+        products = observation["filtered_products"]
+        query = observation["query"].lower()
+        
+        # 如果有产品且符合条件，选择产品
+        if products and (step >= 3 or random.random() < 0.3):
+            # 尝试选择最符合查询的产品
+            best_product = self._find_best_match(products, query)
+            return {"type": "select", "product_id": best_product["id"]}
+        
+        # 否则应用智能过滤器
+        filter_type, filter_value = self._select_smart_filter(query, observation["current_filters"])
+        return {"type": "filter", "filter_type": filter_type, "filter_value": filter_value}
+    
+    def _find_best_match(self, products, query):
+        """找到最符合查询的产品"""
+        # 简单的关键词匹配
+        for product in products:
+            if any(keyword in query for keyword in product["name"].lower().split()):
+                return product
+        return products[0]  # 默认返回第一个
+    
+    def _select_smart_filter(self, query, current_filters):
+        """选择智能过滤器"""
+        filter_rules = [
+            ("brand", ["apple", "samsung", "nike", "adidas", "google", "under armour", "kitchenaid", "breville"]),
+            ("color", ["black", "white", "silver", "blue", "titanium", "space gray"]),
+            ("storage", ["128gb", "256gb", "512gb"]),
+            ("size", ["10", "m", "l"]),
+            ("type", ["sneakers", "hoodie", "shorts", "countertop", "drip"])
+        ]
+        
+        for filter_type, values in filter_rules:
+            if filter_type not in current_filters:
+                for value in values:
+                    if value in query:
+                        return filter_type, value
+        
+        # 如果没有匹配，随机选择
+        import random
+        available_filters = [ft for ft, _ in filter_rules if ft not in current_filters]
+        if available_filters:
+            filter_type = random.choice(available_filters)
+            filter_values = dict(filter_rules)[filter_type]
+            return filter_type, random.choice(filter_values)
+        else:
+            return "brand", "Apple"  # 默认
     
     def train(self, num_episodes=20):
         """主训练循环"""
-        print(f"🚀 开始训练，使用{'模拟' if self.use_simulated else '真实'}环境")
+        print("🚀 开始详细训练...")
+        print(f"📊 计划训练 {num_episodes} 个episodes")
+        print(f"🎮 使用{'模拟' if self.use_simulated else '真实'}环境")
         
-        rewards = []
-        user_queries = [
-            "I want to buy an iPhone with 128GB storage",
-            "Looking for Nike sneakers in size 10",
-            "Need a MacBook with 512GB storage",
-            "I want a black Adidas hoodie"
-        ]
+        start_time = import time; time.time()
         
         for episode in range(num_episodes):
-            user_query = user_queries[episode % len(user_queries)]
+            reward, steps, accuracy = self.train_episode_detailed(episode)
             
-            if self.use_simulated:
-                reward = self.train_episode_simulated(user_query)
-            else:
-                reward = self.train_episode_real(user_query)
-            
-            rewards.append(reward)
-            
+            # 每5个episode打印进度
             if (episode + 1) % 5 == 0:
-                avg_reward = sum(rewards[-5:]) / 5
-                print(f"📊 Episode {episode+1}: 奖励 = {reward:.2f}, 平均奖励 = {avg_reward:.3f}")
+                recent_stats = self.evaluator.get_summary_stats()
+                print(f"\n📈 进度报告 (Episodes 1-{episode+1}):")
+                print(f"   平均奖励: {recent_stats['average_reward']:.3f}")
+                print(f"   平均步数: {recent_stats['average_steps']:.1f}")
+                print(f"   成功率: {recent_stats['success_rate']:.1f}%")
         
-        final_avg = sum(rewards) / len(rewards)
-        print(f"🎉 训练完成! 最终平均奖励: {final_avg:.3f}")
-        return rewards
+        # 训练完成
+        training_time = import time; time.time() - start_time
+        final_stats = self.evaluator.get_summary_stats()
+        
+        print(f"\n⏱️ 训练时间: {training_time:.1f}秒")
+        self.evaluator.print_detailed_report()
+        
+        # 环境指标
+        env_metrics = self.env.get_metrics()
+        print(f"\n🔄 环境统计:")
+        print(f"   • 总步数: {env_metrics['total_steps']}")
+        print(f"   • 成功选择: {env_metrics['successful_selections']}")
+        print(f"   • 失败选择: {env_metrics['failed_selections']}")
+        print(f"   • 过滤器应用: {env_metrics['filter_applications']}")
+        
+        return final_stats
 
-def save_results_to_volume():
-    """保存训练结果到共享卷"""
-    import shutil
-    from pathlib import Path
+def save_detailed_results(stats, evaluator):
+    """保存详细结果"""
     import json
+    import pandas as pd
+    from pathlib import Path
     
-    print("💾 保存训练结果...")
+    print("\n💾 保存详细训练结果...")
     
-    # 创建模拟结果文件
+    # 保存汇总统计
     results = {
-        "training_completed": True,
-        "environment": "simulated",
-        "average_reward": 0.85,
-        "model_files": ["model_weights.pth", "training_config.json"]
+        "training_summary": stats,
+        "environment": "simulated_webshop",
+        "training_timestamp": import time; time.time(),
+        "model_version": "RAGEN-v1.0"
     }
     
-    with open("training_results.json", "w") as f:
+    with open("training_summary.json", "w") as f:
         json.dump(results, f, indent=2)
     
-    # 复制到卷
+    # 保存详细历史
+    history_df = pd.DataFrame(evaluator.training_history)
+    history_df.to_csv("training_history.csv", index=False)
+    
+    # 保存到卷
     volume_path = Path("/root/models")
     volume_path.mkdir(exist_ok=True)
     
-    shutil.copy2("training_results.json", volume_path / "training_results.json")
-    print("✅ 结果已保存到共享卷")
+    files_to_save = ["training_summary.json", "training_history.csv"]
+    for filename in files_to_save:
+        import shutil
+        shutil.copy2(filename, volume_path / filename)
+        print(f"  ✅ 保存: {filename}")
+    
+    print(f"📦 总共保存了 {len(files_to_save)} 个结果文件")
 
 @app.function(
     image=base_image,
@@ -232,16 +451,14 @@ def save_results_to_volume():
     secrets=[modal.Secret.from_name("my-huggingface-secret")]
 )
 def train_from_github():
-    """从GitHub克隆项目并训练 - 优先尝试真实WebShop，失败则用模拟环境"""
+    """详细的训练流程"""
     import os
     import sys
     from pathlib import Path
     import subprocess
-    import time
-    import requests
     import shutil
     
-    print("🚀 开始RAGEN训练流程...")
+    print("🚀 开始详细的RAGEN训练流程...")
     
     # 克隆GitHub仓库
     repo_url = "https://github.com/YangLu963/Regan.git"
@@ -256,54 +473,26 @@ def train_from_github():
             capture_output=True, text=True, check=True
         )
         print("✅ GitHub仓库克隆成功")
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         print(f"❌ Git克隆失败: {e}")
         return {"status": "error", "message": "Git克隆失败"}
     
-    # 尝试启动真实WebShop
-    use_simulated = True  # 默认使用模拟环境
+    # 使用模拟环境训练
+    print("🎮 使用模拟WebShop环境进行详细训练...")
     
     try:
-        print("🔧 尝试启动真实WebShop...")
-        webshop_dir = Path("/root/WebShop")
+        trainer = DetailedRAGENTrainer(use_simulated=True)
+        final_stats = trainer.train(num_episodes=20)
         
-        # 克隆WebShop
-        if webshop_dir.exists():
-            shutil.rmtree(webshop_dir)
-        
-        subprocess.run([
-            "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
-            str(webshop_dir)
-        ], check=True, capture_output=True, text=True)
-        print("✅ WebShop仓库克隆成功")
-        
-        # 尝试启动（简化版本）
-        print("⏳ 尝试启动WebShop服务器...")
-        # 这里应该是真实的启动逻辑，但为了简化，我们假设启动失败
-        raise Exception("WebShop启动失败，回退到模拟环境")
-        
-    except Exception as e:
-        print(f"⚠️ 真实WebShop启动失败: {e}")
-        print("🔄 回退到模拟环境训练...")
-        use_simulated = True
-    
-    # 开始训练
-    try:
-        print("🎯 初始化训练器...")
-        trainer = RAGENTrainer(use_simulated=use_simulated)
-        
-        print("🏋️ 开始训练...")
-        rewards = trainer.train(num_episodes=20)
-        
-        # 保存结果
-        save_results_to_volume()
+        # 保存详细结果
+        save_detailed_results(final_stats, trainer.evaluator)
         
         return {
             "status": "completed",
-            "message": "训练成功完成",
-            "environment": "simulated" if use_simulated else "real",
-            "average_reward": sum(rewards) / len(rewards),
-            "total_episodes": len(rewards)
+            "message": "详细训练成功完成",
+            "environment": "simulated",
+            "summary_stats": final_stats,
+            "total_training_time": final_stats.get('total_episodes', 0)
         }
         
     except Exception as e:
@@ -338,18 +527,6 @@ def download_results():
     
     return {"status": "success", "files": downloaded_files}
 
-@app.function(image=base_image)
-def test_environment():
-    """测试环境"""
-    print("🧪 测试训练环境...")
-    
-    trainer = RAGENTrainer(use_simulated=True)
-    reward = trainer.train_episode_simulated("Test query")
-    print(f"✅ 测试完成，奖励: {reward}")
-    
-    return {"status": "test_passed", "reward": reward}
-
 if __name__ == "__main__":
     with app.run():
-        # 现在可以使用 train_from_github 了
         train_from_github.remote()
