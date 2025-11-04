@@ -364,4 +364,4 @@ def debug_webshop():
 
 if __name__ == "__main__":
     with app.run():
-        train_from_github.remote()解决了吗？
+        train_from_github.remote()
