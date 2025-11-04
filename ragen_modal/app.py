@@ -82,14 +82,29 @@ def train_from_github():
     
     print("🔧 修正WebShop启动方式...")
     
-    # 1. 检查WebShop实际目录结构
+    # 1. 首先克隆WebShop仓库
     webshop_dir = Path("/root/WebShop")
+    print("📥 克隆WebShop仓库...")
+    try:
+        if webshop_dir.exists():
+            shutil.rmtree(webshop_dir)
+        
+        subprocess.run([
+            "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
+            str(webshop_dir)
+        ], check=True, capture_output=True, text=True)
+        print("✅ WebShop仓库克隆成功")
+    except Exception as e:
+        print(f"❌ WebShop克隆失败: {e}")
+        return {"status": "error", "message": "WebShop克隆失败"}
+    
+    # 2. 检查WebShop实际目录结构
     print("📁 WebShop目录结构:")
     result = subprocess.run(["find", ".", "-name", "*.py", "-type", "f"], 
                           cwd=str(webshop_dir), capture_output=True, text=True)
     print(result.stdout)
     
-    # 2. 查找正确的启动文件
+    # 3. 查找正确的启动文件
     possible_start_files = [
         "run.py",
         "server.py", 
@@ -110,7 +125,7 @@ def train_from_github():
         # 手动启动方案
         return manual_webshop_start(webshop_dir)
     
-    # 3. 使用虚拟环境启动
+    # 4. 使用虚拟环境启动
     print("🚀 使用虚拟环境启动WebShop...")
     webshop_process = subprocess.Popen([
         "/root/webshop_venv/bin/python", start_file, "--port", "3000"
@@ -119,7 +134,7 @@ def train_from_github():
        stderr=subprocess.PIPE,
        text=True)
 
-    # 4. 等待服务器启动
+    # 5. 等待服务器启动
     print("⏳ 等待WebShop服务器启动...")
     server_started = False
     
@@ -349,4 +364,4 @@ def debug_webshop():
 
 if __name__ == "__main__":
     with app.run():
-        train_from_github.remote()
+        train_from_github.remote()解决了吗？
