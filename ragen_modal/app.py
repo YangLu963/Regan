@@ -1,4 +1,4 @@
-import modal
+import modal  
 
 app = modal.App("ragen-github-webshop")
 
@@ -152,12 +152,15 @@ def train_from_github():
 
     # 5. 使用虚拟环境启动
     print("🚀 使用虚拟环境启动WebShop...")
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(webshop_dir)
     webshop_process = subprocess.Popen([
         "/root/webshop_venv/bin/python", start_file, "--port", "3000"
     ], cwd=str(webshop_dir), 
        stdout=subprocess.PIPE, 
        stderr=subprocess.PIPE,
-       text=True)
+       text=True,
+       env=env)
 
     # 6. 等待服务器启动
     print("⏳ 等待WebShop服务器启动...")
