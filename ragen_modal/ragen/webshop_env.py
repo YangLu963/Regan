@@ -1,4 +1,3 @@
-# ragen/webshop_env.py - 修改后的版本
 import requests
 import json
 import time
@@ -113,7 +112,7 @@ class WebShopEnv:
                 data = response.json()
                 
                 observation = data.get('observation', f"执行: {action}")
-                reward = float(data.get('reward', 0.0))  # 修复：确保reward是float
+                reward = data.get('reward', 0.0)
                 done = data.get('done', False) or self.current_step >= self.max_steps
                 
                 info = {
@@ -139,7 +138,7 @@ class WebShopEnv:
             'real_environment': False
         }
         
-        return observation, float(reward), done, info  # 修复：确保reward是float
+        return observation, reward, done, info
     
     def _simulate_step(self, action):
         """模拟环境步骤"""
