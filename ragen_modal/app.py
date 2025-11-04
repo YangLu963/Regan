@@ -125,7 +125,25 @@ def train_from_github():
         # 手动启动方案
         return manual_webshop_start(webshop_dir)
     
-    # 4. 使用虚拟环境启动
+    # 4. 在启动前安装WebShop依赖
+    print("📦 预先安装WebShop依赖...")
+    requirements_file = webshop_dir / "requirements.txt"
+    if requirements_file.exists():
+        try:
+            print("⏳ 安装WebShop依赖（这可能需要几分钟）...")
+            subprocess.run([
+                "/root/webshop_venv/bin/pip", "install", "-r", str(requirements_file)
+            ], check=True, timeout=600)  # 10分钟超时
+            print("✅ WebShop依赖安装完成")
+        except Exception as e:
+            print(f"❌ 依赖安装失败: {e}")
+            # 备选方案：只安装核心依赖
+            subprocess.run([
+                "/root/webshop_venv/bin/pip", "install", 
+                "flask==2.1.2", "requests==2.27.1", "numpy==1.22.4"
+            ], check=False)
+
+    # 5. 使用虚拟环境启动
     print("🚀 使用虚拟环境启动WebShop...")
     webshop_process = subprocess.Popen([
         "/root/webshop_venv/bin/python", start_file, "--port", "3000"
@@ -134,7 +152,7 @@ def train_from_github():
        stderr=subprocess.PIPE,
        text=True)
 
-    # 5. 等待服务器启动
+    # 6. 等待服务器启动
     print("⏳ 等待WebShop服务器启动...")
     server_started = False
     
@@ -146,25 +164,6 @@ def train_from_github():
                 print(f"❌ WebShop进程异常退出:")
                 print(f"STDOUT: {stdout}")
                 print(f"STDERR: {stderr}")
-                
-                # 尝试诊断问题
-                if "No module named" in stderr:
-                    print("🔧 检测到模块缺失，尝试安装依赖...")
-                    # 安装WebShop特定依赖
-                    requirements_file = webshop_dir / "requirements.txt"
-                    if requirements_file.exists():
-                        subprocess.run([
-                            "pip", "install", "-r", str(requirements_file)
-                        ], check=True, timeout=120)
-                        print("✅ 依赖安装完成，重新启动...")
-                        # 重新启动
-                        webshop_process = subprocess.Popen([
-                            "python", "run.py", "--port", "3000"
-                        ], cwd=str(webshop_dir), 
-                           stdout=subprocess.PIPE, 
-                           stderr=subprocess.PIPE,
-                           text=True)
-                        continue
                 break
             
             # 检查HTTP连接
