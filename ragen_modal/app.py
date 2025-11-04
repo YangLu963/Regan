@@ -3,7 +3,7 @@ import modal
 
 app = modal.App("ragen-github-webshop")
 
-# 第一阶段：基础镜像（只包含必要依赖）
+# 第一阶段：基础镜像（包含所有必要依赖）
 base_image = (
     modal.Image.debian_slim(python_version="3.10")
     .pip_install(
@@ -13,11 +13,15 @@ base_image = (
         "numpy>=1.24.3",
         "requests>=2.31.0",
         "PyYAML>=6.0.1", 
-        "urllib3>=2.0.0",  # 保持高版本
+        "urllib3>=2.0.0",
         "tqdm>=4.66.1",
         "flask>=2.3.0",
         "flask-cors>=4.0.0",
-        "beautifulsoup4>=4.12.0"
+        "beautifulsoup4>=4.12.0",
+        "rich",  # 添加缺失的rich模块
+        "scikit-learn",
+        "pandas",
+        "nmslib"
     )
     .run_commands(
         "apt-get update && apt-get install -y git build-essential cmake",
@@ -89,13 +93,29 @@ def train_from_github():
         
         print("✅ WebShop仓库克隆完成")
         
-        # 检查目录结构
+        # 2. 安装WebShop完整依赖
+        print("📦 安装WebShop完整依赖...")
+        webshop_requirements = ["rich", "beautifulsoup4", "nmslib", "scikit-learn", "pandas", "flask", "flask-cors"]
+        for dep in webshop_requirements:
+            try:
+                subprocess.run(["pip", "install", dep], check=True, timeout=60)
+                print(f"✅ 安装 {dep} 成功")
+            except Exception as e:
+                print(f"⚠️ 安装 {dep} 失败: {e}")
+
+        # 如果WebShop有requirements.txt，也安装
+        requirements_file = webshop_dir / "requirements.txt"
+        if requirements_file.exists():
+            print("📦 安装WebShop requirements.txt...")
+            subprocess.run(["pip", "install", "-r", str(requirements_file)], timeout=120)
+        
+        # 3. 检查目录结构
         print("📁 WebShop目录结构:")
         result = subprocess.run(["find", ".", "-name", "*.py", "-type", "f"], 
                               cwd=str(webshop_dir), capture_output=True, text=True)
-        print(result.stdout[:2000])  # 显示更多内容
+        print(result.stdout[:2000])
         
-        # 2. 查找正确的启动文件
+        # 4. 查找正确的启动文件
         possible_start_files = [
             "run.py",
             "server.py", 
@@ -116,17 +136,7 @@ def train_from_github():
             webshop_process = create_simulated_webshop()
             os.environ["USE_SIMULATED_WEBSHOP"] = "true"
         else:
-            # 3. 安装WebShop特定依赖（避免冲突）
-            print("📦 安装WebShop最小依赖...")
-            webshop_deps = ["beautifulsoup4", "nmslib", "scikit-learn", "pandas", "flask", "flask-cors"]
-            for dep in webshop_deps:
-                try:
-                    subprocess.run(["pip", "install", dep], check=True, timeout=60)
-                    print(f"✅ 安装 {dep} 成功")
-                except Exception as e:
-                    print(f"⚠️ 安装 {dep} 失败: {e}")
-            
-            # 4. 启动WebShop服务器
+            # 5. 启动WebShop服务器
             print(f"🚀 启动WebShop服务: {start_file}")
             webshop_process = subprocess.Popen([
                 "python", start_file, "--port", "3000"
@@ -136,11 +146,11 @@ def train_from_github():
                text=True)
             os.environ["USE_SIMULATED_WEBSHOP"] = "false"
 
-        # 5. 等待服务器启动
+        # 6. 等待服务器启动
         print("⏳ 等待WebShop服务器启动...")
         server_started = False
         
-        for i in range(30):  # 30秒超时
+        for i in range(30):
             try:
                 # 检查进程是否存活
                 if webshop_process and webshop_process.poll() is not None:
@@ -177,7 +187,6 @@ def train_from_github():
         
         if not server_started:
             print("❌ WebShop服务器启动失败，使用模拟环境继续训练")
-            # 即使服务器启动失败，也继续训练（使用模拟环境）
             os.environ["USE_SIMULATED_WEBSHOP"] = "true"
             
     except Exception as e:
@@ -232,6 +241,8 @@ def train_from_github():
 
 def create_simulated_webshop():
     """创建模拟WebShop服务器"""
+    from pathlib import Path  # 修复：添加导入
+    import tempfile
     print("🎭 创建模拟WebShop服务器...")
     
     server_code = '''
@@ -248,10 +259,15 @@ def home():
 @app.route('/search/<query>')
 def search(query):
     """模拟搜索功能"""
-    time.sleep(0.1)  # 模拟延迟
+    time.sleep(0.1)
     
     products = []
-    if "red" in query.lower() and "shirt" in query.lower():
+    if "stainless steel water bottle" in query.lower():
+        products = [
+            {"id": "5001", "name": "Stainless Steel Water Bottle 1L", "price": 24.99, "material": "stainless steel"},
+            {"id": "5002", "name": "Insulated Steel Bottle 750ml", "price": 29.99, "material": "stainless steel"}
+        ]
+    elif "red" in query.lower() and "shirt" in query.lower():
         products = [
             {"id": "1001", "name": "Red Cotton T-Shirt", "price": 29.99, "color": "red", "size": "M"},
             {"id": "1002", "name": "Red Polo Shirt", "price": 39.99, "color": "red", "size": "L"}
@@ -263,8 +279,7 @@ def search(query):
         ]
     else:
         products = [
-            {"id": "3001", "name": "Blue Jeans", "price": 39.99, "color": "blue"},
-            {"id": "3002", "name": "White Sneakers", "price": 59.99, "color": "white"}
+            {"id": "3001", "name": "Generic Product", "price": 19.99, "description": "Try more specific search"}
         ]
     
     return jsonify({"products": products, "query": query})
@@ -275,10 +290,12 @@ def click(product_id):
     time.sleep(0.1)
     
     product_details = {
-        "1001": {"id": "1001", "name": "Red Cotton T-Shirt", "price": 29.99, "color": "red", "description": "Comfortable cotton t-shirt", "in_stock": True},
-        "1002": {"id": "1002", "name": "Red Polo Shirt", "price": 39.99, "color": "red", "description": "Classic polo shirt", "in_stock": True},
-        "2001": {"id": "2001", "name": "Black Laptop Backpack", "price": 49.99, "has_laptop_compartment": True, "description": "Durable laptop backpack", "in_stock": True},
-        "2002": {"id": "2002", "name": "Black Travel Backpack", "price": 59.99, "has_laptop_compartment": True, "description": "Spacious travel backpack", "in_stock": True}
+        "5001": {"id": "5001", "name": "Stainless Steel Water Bottle 1L", "price": 24.99, "material": "stainless steel", "in_stock": True},
+        "5002": {"id": "5002", "name": "Insulated Steel Bottle 750ml", "price": 29.99, "material": "stainless steel", "in_stock": True},
+        "1001": {"id": "1001", "name": "Red Cotton T-Shirt", "price": 29.99, "color": "red", "in_stock": True},
+        "1002": {"id": "1002", "name": "Red Polo Shirt", "price": 39.99, "color": "red", "in_stock": True},
+        "2001": {"id": "2001", "name": "Black Laptop Backpack", "price": 49.99, "has_laptop_compartment": True, "in_stock": True},
+        "2002": {"id": "2002", "name": "Black Travel Backpack", "price": 59.99, "has_laptop_compartment": True, "in_stock": True}
     }
     
     product = product_details.get(product_id, {"id": product_id, "name": "Unknown Product", "in_stock": False})
@@ -289,7 +306,7 @@ def buy(product_id):
     """模拟购买功能"""
     time.sleep(0.2)
     
-    if product_id in ["1001", "1002", "2001", "2002"]:
+    if product_id in ["5001", "5002", "1001", "1002", "2001", "2002"]:
         return jsonify({
             "success": True,
             "order_id": f"ORDER_{random.randint(1000,9999)}",
@@ -307,7 +324,6 @@ if __name__ == '__main__':
 '''
     
     # 写入模拟服务器文件
-    import tempfile
     temp_dir = tempfile.mkdtemp()
     server_file = Path(temp_dir) / "simulated_webshop.py"
     
@@ -368,48 +384,6 @@ def download_results():
             print(f"  ✅ 下载: {item.name}")
     
     return {"status": "success", "files": downloaded_files}
-
-# 简化调试函数
-@app.function(image=base_image)
-def debug_webshop():
-    """调试WebShop安装"""
-    import subprocess
-    from pathlib import Path
-    import shutil
-    
-    print("🔧 调试WebShop安装...")
-    
-    webshop_dir = Path("/root/WebShop")
-    
-    # 清理旧目录
-    if webshop_dir.exists():
-        shutil.rmtree(webshop_dir)
-    
-    # 克隆WebShop
-    print("📥 克隆WebShop...")
-    result = subprocess.run([
-        "git", "clone", "https://github.com/princeton-nlp/WebShop.git", 
-        str(webshop_dir)
-    ], capture_output=True, text=True)
-    
-    if result.returncode != 0:
-        print(f"❌ Git克隆失败: {result.stderr}")
-        return {"status": "error", "message": "Git克隆失败"}
-    
-    print("✅ 克隆成功")
-    
-    # 检查目录内容
-    print("📁 目录内容:")
-    result = subprocess.run(["ls", "-la"], cwd=str(webshop_dir), capture_output=True, text=True)
-    print(result.stdout)
-    
-    # 查找启动文件
-    print("🔍 查找启动文件...")
-    result = subprocess.run(["find", ".", "-name", "*.py", "-type", "f"], 
-                          cwd=str(webshop_dir), capture_output=True, text=True)
-    print(result.stdout)
-    
-    return {"status": "debug_complete", "message": "检查完成"}
 
 if __name__ == "__main__":
     with app.run():
