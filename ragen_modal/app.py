@@ -5,6 +5,7 @@ app = modal.App("ragen-github-webshop")
 # 第一阶段：基础镜像（只包含必要依赖）
 base_image = (
     modal.Image.debian_slim(python_version="3.10")
+    .apt_install("git", "build-essential", "cmake")
     .pip_install(
         "torch>=2.1.0",
         "transformers>=4.37.0", 
@@ -16,6 +17,9 @@ base_image = (
         "tqdm>=4.66.1",
         "flask>=2.3.0",
         "flask-cors>=4.0.0"
+        )  
+      .run_commands(
+        "git config --global http.postBuffer 1048576000"
     )
 )
 
@@ -56,7 +60,7 @@ def train_from_github():
     
     # 克隆你的GitHub仓库
     repo_url = "https://github.com/YangLu963/Regan.git"
-    work_dir = Path("/root/ragen_project")
+    work_dir = Path("/root/Regan") 
     
     try:
         # 清理旧目录
@@ -75,8 +79,6 @@ def train_from_github():
     project_dir = work_dir / "ragen_modal"
     os.chdir(project_dir)
     sys.path.insert(0, str(project_dir))
-    
-    # ================== 启动真实WebShop服务器 ==================
     
     print("🔧 修正WebShop启动方式...")
     
