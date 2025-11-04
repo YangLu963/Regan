@@ -1,4 +1,7 @@
 import modal
+import time
+import random
+import json
 
 app = modal.App("ragen-github-webshop")
 
@@ -193,7 +196,7 @@ class TrainingEvaluator:
             'accuracy': accuracy,
             'query': query,
             'selected_product': selected_product,
-            'timestamp': import time; time.time()
+            'timestamp': time.time()
         }
         self.training_history.append(episode_data)
         self.episode_rewards.append(reward)
@@ -323,8 +326,6 @@ class DetailedRAGENTrainer:
     
     def _select_intelligent_action(self, observation, step):
         """智能动作选择（模拟策略）"""
-        import random
-        
         products = observation["filtered_products"]
         query = observation["query"].lower()
         
@@ -363,7 +364,6 @@ class DetailedRAGENTrainer:
                         return filter_type, value
         
         # 如果没有匹配，随机选择
-        import random
         available_filters = [ft for ft, _ in filter_rules if ft not in current_filters]
         if available_filters:
             filter_type = random.choice(available_filters)
@@ -378,7 +378,7 @@ class DetailedRAGENTrainer:
         print(f"📊 计划训练 {num_episodes} 个episodes")
         print(f"🎮 使用{'模拟' if self.use_simulated else '真实'}环境")
         
-        start_time = import time; time.time()
+        start_time = time.time()
         
         for episode in range(num_episodes):
             reward, steps, accuracy = self.train_episode_detailed(episode)
@@ -392,7 +392,7 @@ class DetailedRAGENTrainer:
                 print(f"   成功率: {recent_stats['success_rate']:.1f}%")
         
         # 训练完成
-        training_time = import time; time.time() - start_time
+        training_time = time.time() - start_time
         final_stats = self.evaluator.get_summary_stats()
         
         print(f"\n⏱️ 训练时间: {training_time:.1f}秒")
@@ -410,8 +410,7 @@ class DetailedRAGENTrainer:
 
 def save_detailed_results(stats, evaluator):
     """保存详细结果"""
-    import json
-    import pandas as pd
+    import shutil
     from pathlib import Path
     
     print("\n💾 保存详细训练结果...")
@@ -420,7 +419,7 @@ def save_detailed_results(stats, evaluator):
     results = {
         "training_summary": stats,
         "environment": "simulated_webshop",
-        "training_timestamp": import time; time.time(),
+        "training_timestamp": time.time(),
         "model_version": "RAGEN-v1.0"
     }
     
@@ -428,6 +427,7 @@ def save_detailed_results(stats, evaluator):
         json.dump(results, f, indent=2)
     
     # 保存详细历史
+    import pandas as pd
     history_df = pd.DataFrame(evaluator.training_history)
     history_df.to_csv("training_history.csv", index=False)
     
@@ -437,7 +437,6 @@ def save_detailed_results(stats, evaluator):
     
     files_to_save = ["training_summary.json", "training_history.csv"]
     for filename in files_to_save:
-        import shutil
         shutil.copy2(filename, volume_path / filename)
         print(f"  ✅ 保存: {filename}")
     
